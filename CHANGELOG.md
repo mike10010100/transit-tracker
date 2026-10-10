@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.35.13] - 2026-10-10
+
+### Fixed
+
+- **Hermetic Multi-Device Web Interface Unit Test**: Fixed a time-of-day flake in `tests/test_server_http.py` (`test_fleet_overview_multi_device_rendering`) where devices seen 1 hour ago were classified as online during overnight hours (22:00–06:00 UTC) due to the dynamic 3600s deep-eco poll interval (2.5x cutoff = 9000s). Devices intended to be offline are now set to 24 hours in the past, ensuring test hermeticity across all timezones and times of day.
+- **GTFS Index Rebuild Thread Cleanup in Tests**: In `tests/test_gtfs_bus.py` (`test_ensure_index_branches`), explicitly join the background rebuild thread before temporary directory context cleanup to eliminate directory deletion race conditions.
+
 ## [1.35.12] - 2026-10-10
 
 ### Changed
