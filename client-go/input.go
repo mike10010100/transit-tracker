@@ -48,19 +48,19 @@ func (tc *TrackerClient) configureGestureHandlers(gd *GestureDetector, cancel co
 		refresh()
 	}
 	gd.OnBottomLeftTap = func(x, y int32) {
-		tc.dataInteraction()
+		// The view choice itself arms the hold and fast poll (EvViewTap).
 		newMode := tc.cycleViewMode()
 		tc.logRemote(fmt.Sprintf("Bottom-Left corner tapped at (%d, %d)! View mode cycled to: %s. Refreshing...", x, y, newMode))
 		refresh()
 	}
 	gd.OnBusesTap = func(x, y int32) {
-		tc.dataInteraction()
+		// The view choice itself arms the hold and fast poll (EvViewTap).
 		newMode := tc.setExplicitViewMode("evening")
 		tc.logRemote(fmt.Sprintf("BUSES button tapped at (%d, %d)! View set to: %s. Refreshing...", x, y, newMode))
 		refresh()
 	}
 	gd.OnBikesTap = func(x, y int32) {
-		tc.dataInteraction()
+		// The view choice itself arms the hold and fast poll (EvViewTap).
 		newMode := tc.setExplicitViewMode("morning")
 		tc.logRemote(fmt.Sprintf("CITI BIKE button tapped at (%d, %d)! View set to: %s. Refreshing...", x, y, newMode))
 		refresh()

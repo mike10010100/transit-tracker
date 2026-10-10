@@ -30,6 +30,7 @@ test-sh:
 fuzz:
 	@echo "==> Running Go native fuzz targets (smoke test)..."
 	@cd client-go && go test -run=^FuzzParseInputEvents$$ -fuzz=^FuzzParseInputEvents$$ -fuzztime=3s .
+	@cd client-go && go test -run=^FuzzParsePolicy$$ -fuzz=^FuzzParsePolicy$$ -fuzztime=3s .
 	@cd client-go/internal/otasig && go test -run=^FuzzVerifyManifest$$ -fuzz=^FuzzVerifyManifest$$ -fuzztime=3s .
 	@cd client-go/internal/otasig && go test -run=^FuzzVerifyCert$$ -fuzz=^FuzzVerifyCert$$ -fuzztime=3s .
 	@cd client-go/internal/otasig && go test -run=^FuzzParseSemver$$ -fuzz=^FuzzParseSemver$$ -fuzztime=3s .

@@ -72,8 +72,8 @@ func TestAdoptableServerURL_HostnameResolution(t *testing.T) {
 
 func TestNewTrackerClient_DefaultsEmptyViewToAuto(t *testing.T) {
 	tc := NewTrackerClient("http://192.168.1.100:8000", "")
-	if tc.viewMode != "auto" {
-		t.Errorf("expected empty initial view to default to auto, got %q", tc.viewMode)
+	if got := tc.getViewMode(); got != "auto" {
+		t.Errorf("expected empty initial view to default to auto, got %q", got)
 	}
 	if tc.client == nil || tc.refreshCh == nil {
 		t.Fatal("expected client and refresh channel to be initialized")

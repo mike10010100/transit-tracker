@@ -283,19 +283,13 @@ func TestScreenOnlyActionsDoNotArmFastPoll(t *testing.T) {
 	// Frontlight actions are screen-only: they must NOT pin fast polling.
 	gd.OnSingleTap(0, 0)
 	gd.OnLightTap(0, 0)
-	tc.mu.Lock()
-	armed := !tc.lastDataInteraction.IsZero()
-	tc.mu.Unlock()
-	if armed {
+	if armed := tc.overlayNow().FastPoll(time.Now()); armed {
 		t.Error("screen-only actions must not arm the fast-poll hold")
 	}
 
 	// Data-affecting actions DO arm it.
 	gd.OnRefreshTap(0, 0)
-	tc.mu.Lock()
-	armed = !tc.lastDataInteraction.IsZero()
-	tc.mu.Unlock()
-	if !armed {
+	if armed := tc.overlayNow().FastPoll(time.Now()); !armed {
 		t.Error("refresh must arm the fast-poll hold")
 	}
 }

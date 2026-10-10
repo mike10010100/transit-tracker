@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.37.0] - 2026-10-10
+
+### Added
+
+- **Client Interaction State Machine** (`client-go/interaction.go`): Formalized client-side interaction modes into an event-driven overlay state machine (`idle -> session -> hold`). Pure transition function with complete test matrix and 100% statement coverage.
+- **Unified Response Format `transit-tracker-resp-v2` Client Verification**: Client verifies response signatures under `transit-tracker-resp-v2`, authenticating all response headers including `X-Tracker-Policy` for end-to-end cryptographic integrity.
+- **Strict Policy Parsing & Clamping**: `parsePolicy` decodes `X-Tracker-Policy` with fail-safe bounds clamping on session timeout, fast poll hold, manual hold, and frontlight intensity/warmth. Covered by continuous native Go fuzzing (`FuzzParsePolicy`).
+- **Phase-Boundary Clamped RTC Wakes**: In sleep mode (`runSleepLoop`), the hardware RTC wakealarm is clamped to `min(interval, until - now)` based on the active policy's phase transition deadline, ensuring the device wakes promptly when a phase transitions (e.g. morning peak) without oversleeping.
+- **Policy-Governed Suspend**: Device suspend-to-RAM in sleep mode is explicitly gated by the server's policy (`suspend=0` stays awake on wall clock).
+
+### Changed
+
+- Refactored scattered interaction flags (`interacting`, `lastDataInteraction`, `manualLightTime`, `manualViewTime`) into the centralized interaction overlay.
+- Removed hardcoded commute hours fallback in `client-go/schedule.go` in favor of last-known policy state and exponential backoff retry.
+- Session auto-lighting and hold suppression directly integrate with overlay state and policy tunables.
+
+---
+
 ## [1.36.0] - 2026-10-10
 
 ### Added

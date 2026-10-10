@@ -85,9 +85,9 @@ The server runs on standard Linux/macOS hosts, home servers, or Raspberry Pis us
 ### 2.3 Schedule State Machine (`server/state_machine.py`, `server/schedule.py`)
 
 The schedule is a configurable two-layer state machine. The server owns
-**layer 1**, the time-driven *phase*. The client will own **layer 2**, the
+**layer 1**, the time-driven *phase*. The client owns **layer 2**, the
 event-driven *interaction overlay* (`idle → session → hold`). Its timeouts are
-configured here and shipped in the signed `X-Tracker-Policy` header.
+configured on the server and shipped in the signed `X-Tracker-Policy` header.
 
 ```mermaid
 stateDiagram-v2
@@ -122,7 +122,7 @@ Precedence, from lowest to highest: built-in defaults, then `schedule.json`, the
 
 **Testing aids:** `FORCE_PHASE=<name>` pins a phase. `FORCE_FAST_POLL=1` forces an interactive face with 60 s polling.
 
-**Interaction overlay parameters** (`interaction`): `session_timeout` (90 s; how long a power-button session stays awake without touches), `session_lighting` (8 / 12), `fast_poll_hold` (600 s) and `hold` (2700 s; how long manual view and frontlight choices persist). Clients that request response format v2 receive these, plus the current phase, its end (`until`, epoch seconds) and `suspend`, as:
+**Interaction overlay parameters** (`interaction`): `session_timeout` (90 s; how long a power-button session stays awake without touches), `session_lighting` (8 / 12), `fast_poll_hold` (600 s) and `hold` (2700 s; how long manual view and frontlight choices persist). Clients receive these, plus the current phase, its end (`until`, epoch seconds) and `suspend`, in the signed `X-Tracker-Policy` header:
 
 ```
 X-Tracker-Policy: v=1;phase=peak;until=1760103000;suspend=0;session=90;fast=600;hold=2700;sl=8,12
@@ -146,17 +146,44 @@ The Kindle client is a statically linked Go binary compiled for Linux ARMv7 (`CG
 | Subsystem | Source File | Responsibility |
 |---|---|---|
 | **Discovery** | `client-go/discovery.go` | Implements LAN autodiscovery via mDNS, UDP broadcast (`TRANSIT_TRACKER_DISCOVER` on port 8001), and `/24` subnet sweeps. Rejects non-private or public addresses. |
-| **HTTP Engine** | `client-go/client.go` | Manages conditional polling loop (`If-None-Match` / `ETag`), keep-alive connections, exponential backoff, and header injection (`X-Tracker-Client-ID`, `X-Kindle-Battery`). |
-| **Security** | `client-go/security.go` | Validates server identity certificates and response signatures using Ed25519 and `crypto/subtle.ConstantTimeCompare`. |
+| **HTTP Engine** | `client-go/dashboard.go` | Manages conditional polling loop (`If-None-Match` / `ETag`), keep-alive connections, exponential backoff, response auth verification, and header injection. |
+| **Security** | `client-go/internal/otasig` | Implements Ed25519 response signature verification (`transit-tracker-resp-v2`), server identity certificate validation, and manifest checks. |
 | **Event Router** | `client-go/input.go` | Asynchronously reads Linux evdev input streams (`/dev/input/event1` touch, `/dev/input/event0` power key). Decodes single taps, double taps (< 380ms), and button bar coordinates. |
-| **Display Driver** | `client-go/display.go` | Writes raw grayscale images to `/sys/class/graphics/fb0` or invokes the Kindle native `eips` utility for clean e-ink waveform refreshes. |
-| **OTA Supervisor** | `client-go/main.go` | Detects new versions advertised by the server, validates the signed manifest against the embedded release key, writes to disk, and replaces the running process via `syscall.Exec`. |
+| **Interaction Overlay** | `client-go/interaction.go` | Implements client-owned interaction overlay (`idle -> session -> hold`), policy parsing, timeout tracking, and fast-poll holds. |
+| **Power Management** | `client-go/power.go` | Controls low-power sleep loops, Wi-Fi radio toggling, RTC wakealarm programming clamped to phase boundaries, and suspend-to-RAM (`/sys/power/state`). |
+| **Display & Lighting** | `client-go/kindle.go` | Framebuffer geometry detection, Amazon UI suspension, eips rendering, and frontlight intensity/warmth cycling. |
+| **OTA Supervisor** | `client-go/dashboard.go` | Detects new versions advertised by the server, validates the signed manifest against the embedded release key, writes to disk, and replaces the running process via `syscall.Exec`. |
 
 ### 3.2 Client Identification
 The Go client establishes identity in `client-go/client_id.go`:
 1. Queries Kindle hardware serial via `lipc-get-prop com.lab126.system serialNumber`.
 2. Falls back to a persistent RFC 4122 v4 UUID in `/mnt/us/documents/tracker_client_id.txt` (or `/tmp/tracker_client_id.txt` on non-Kindle systems).
 3. Attaches `X-Tracker-Client-ID: <id>` to every HTTP communication.
+
+### 3.3 Interaction Overlay & Low-Power Sleep Machine
+The client runs an event-driven interaction overlay that coordinates user input with the server's schedule policy:
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Idle
+    Idle --> Session: EvPowerWake
+    Session --> Session: EvTouch (extends hold)
+    Session --> Hold: EvSessionEnd (timeout)
+    Session --> Hold: EvDataTap / EvViewTap
+    Hold --> Session: EvPowerWake
+    Hold --> Idle: EvPhaseChanged (clears overrides)
+    Hold --> Idle: EvTick (timers expired)
+```
+
+1. **Overlay States**:
+   - **`idle`**: The server's phase settings apply unchanged.
+   - **`session`**: Active user interaction. Requests `present=interactive`, keeps device awake, lights panel to `session_lighting`, and resets session timer on every touch.
+   - **`hold`**: Manual view and frontlight choices persist, and resident-mode polling stays at fast cadence for `fast_poll_hold`. In low-power suspend mode, this does not keep the device awake. Phase transitions immediately reset `hold` to `idle` to avoid leaking manual choices across phases (e.g. overnight).
+2. **Boundary-Clamped RTC Wakes**:
+   - In low-power sleep mode (`client-go/power.go`), when the device suspends to RAM, the RTC alarm is clamped to `min(interval, until - now)`.
+   - This ensures the device wakes promptly when a schedule phase transitions (e.g., at the start of a morning commute peak) rather than oversleeping through phase changes.
+   - If the phase boundary is closer than `minSuspendInterval` (120s), the device stays awake on wall-clock sleep instead of incurring suspend/resume latency.
 
 ---
 

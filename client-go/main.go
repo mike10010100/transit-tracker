@@ -28,9 +28,8 @@ const (
 	BinaryPath = "/tmp/tracker"
 	PrivateDir = "/tmp/transit-tracker"
 	ImagePath  = "/tmp/transit-tracker/dashboard.png"
-	// ManualHoldDuration bounds the view-override hold and the manual-lighting
-	// hold (how long a user's explicit choice survives before auto resumes).
-	ManualHoldDuration = 45 * time.Minute
+	// The view-override and manual-lighting holds (formerly
+	// ManualHoldDuration) are now the policy's `hold`: see interaction.go.
 )
 
 // ensurePrivateDir creates /tmp/transit-tracker with 0700 permissions and verifies
@@ -74,19 +73,20 @@ type TrackerClient struct {
 	mu sync.Mutex
 	// Fields protected by mu:
 	clientID string
-	// interacting is true while the client is in an awake power-button session,
-	// during which it requests the full tappable dashboard from the server.
-	interacting         bool
+	// overlay is the interaction state machine (idle/session/hold), which
+	// owns the session flag, the manual view override and the manual
+	// lighting/fast-poll holds (see interaction.go).
+	overlay Overlay
+	// policy is the last authenticated server policy (defaultPolicy() until
+	// one arrives); lastPollSec is the last server-advised poll interval.
+	policy              Policy
+	lastPollSec         int
 	serverURL           string
-	manualLightTime     time.Time
-	manualViewTime      time.Time
-	lastDataInteraction time.Time
 	lastETag            string
 	consecutiveErrors   int
 	consecutiveFailures int
 	lastDiscoveryTime   time.Time
 	discoveryBackoff    time.Duration
-	viewMode            string
 	lastRenderedView    string
 	// presentation is the server-advised visual/interaction state: "interactive"
 	// (tappable dashboard, awake), "idle" (suspended; press power to interact)
@@ -96,18 +96,18 @@ type TrackerClient struct {
 
 // NewTrackerClient constructs an initialized TrackerClient with default channels and HTTP timeouts.
 func NewTrackerClient(server string, initialView string) *TrackerClient {
-	if initialView == "" {
-		initialView = "auto"
-	}
-	var mvt time.Time
-	if initialView != "auto" {
-		mvt = time.Now()
+	policy := defaultPolicy()
+	var overlay Overlay
+	if initialView != "" && initialView != "auto" {
+		// A view carried across a re-exec is a manual choice: resume its hold.
+		overlay = Overlay{}.Transition(InteractionEvent{Kind: EvViewTap, View: initialView}, time.Now(), policy)
+		overlay.FastUntil = time.Time{}
 	}
 	return &TrackerClient{
-		clientID:       GetClientID(),
-		serverURL:      server,
-		viewMode:       initialView,
-		manualViewTime: mvt,
+		clientID:  GetClientID(),
+		serverURL: server,
+		overlay:   overlay,
+		policy:    policy,
 		client: &http.Client{
 			Timeout: 15 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -124,48 +124,35 @@ func NewTrackerClient(server string, initialView string) *TrackerClient {
 }
 
 func (tc *TrackerClient) getViewMode() string {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	if tc.viewMode == "" || tc.viewMode == "auto" {
-		return "auto"
+	// A manual view override lapses with the hold (or a phase change).
+	if v := tc.overlayNow().View; v != "" {
+		return v
 	}
-	// Manual view override reverts to auto after 45 minutes of inactivity
-	if !tc.manualViewTime.IsZero() && time.Since(tc.manualViewTime) > ManualHoldDuration {
-		tc.viewMode = "auto"
-		return "auto"
-	}
-	return tc.viewMode
+	return "auto"
 }
 
 func (tc *TrackerClient) cycleViewMode() string {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	current := tc.viewMode
-	if current == "auto" || current == "" {
-		if tc.lastRenderedView != "" {
-			current = tc.lastRenderedView
-		} else {
+	current := tc.overlayNow().View
+	if current == "" {
+		tc.mu.Lock()
+		current = tc.lastRenderedView
+		tc.mu.Unlock()
+		if current == "" {
 			current = "evening"
 		}
 	}
 
 	// Clean 2-way toggle between Morning (Citi Bike) and Evening (Bus) views
+	next := "morning"
 	if current == "morning" {
-		tc.viewMode = "evening"
-	} else {
-		tc.viewMode = "morning"
+		next = "evening"
 	}
-	tc.manualViewTime = time.Now()
-	return tc.viewMode
+	return tc.setExplicitViewMode(next)
 }
 
 func (tc *TrackerClient) setExplicitViewMode(target string) string {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	tc.viewMode = target
-	tc.manualViewTime = time.Now()
-	return tc.viewMode
+	tc.interact(InteractionEvent{Kind: EvViewTap, View: target})
+	return target
 }
 
 func (tc *TrackerClient) getServerURL() string {
@@ -215,35 +202,35 @@ func (tc *TrackerClient) getPresentation() string {
 	return tc.presentation
 }
 
-// setInteracting marks whether we are in an awake power-button session, during
-// which the dashboard is requested in its full tappable form.
-func (tc *TrackerClient) setInteracting(v bool) {
-	tc.mu.Lock()
-	tc.interacting = v
-	tc.mu.Unlock()
-}
-
-func (tc *TrackerClient) isInteracting() bool {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	return tc.interacting
-}
-
 // interactionHoldDuration is how long a touch wake keeps the device awake with
-// no further taps before it re-suspends. Each tap resets it. Variable for tests.
+// no further taps before it re-suspends. Variable for tests.
 var interactionHoldDuration = 90 * time.Second
 
-// interactionAwake keeps the client awake for `d` after a touch wake, servicing
-// forced-refresh taps so the user can browse. Each refresh resets the timer, so
-// the device stays awake as long as the user keeps interacting and sleeps `d`
-// after the last tap. Returns false if ctx ended.
+func (tc *TrackerClient) isInteracting() bool {
+	return tc.inSession()
+}
+
+func (tc *TrackerClient) setInteracting(v bool) {
+	if v {
+		tc.interact(InteractionEvent{Kind: EvPowerWake})
+	} else {
+		tc.interact(InteractionEvent{Kind: EvSessionEnd})
+	}
+}
+
+// interactionAwake runs a power-button session: the overlay enters `session`,
+// the client stays awake for `d` (the policy's session timeout) after the last
+// touch, servicing forced-refresh taps so the user can browse, then the
+// overlay leaves the session (to `hold`). Returns false if ctx ended.
 func (tc *TrackerClient) interactionAwake(ctx context.Context, cancel context.CancelFunc, d time.Duration) bool {
+	tc.interact(InteractionEvent{Kind: EvPowerWake})
+	defer tc.interact(InteractionEvent{Kind: EvSessionEnd})
 	// Hold the screensaver open so powerd doesn't auto-sleep mid-browse.
 	lipcSet("com.lab126.powerd", "preventScreenSaver", "1")
 	// Light the panel for the session (off-peak the auto-lighting leaves it
-	// dark, so a night-time interaction would be unreadable).
-	tc.setInteractionLighting(true)
-	defer tc.setInteractionLighting(false)
+	// dark, so a night-time interaction would be unreadable). Auto-lighting
+	// is suppressed while the overlay is in `session`.
+	tc.applySessionLighting()
 
 	// Render the full tappable dashboard: the user just pressed power to engage
 	// and the suspended face was the inert strip. Wi-Fi is still re-associating
@@ -290,9 +277,7 @@ func (tc *TrackerClient) interactionAwake(ctx context.Context, cancel context.Ca
 }
 
 func (tc *TrackerClient) isManualViewActive() bool {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	return !tc.manualViewTime.IsZero() && time.Since(tc.manualViewTime) <= ManualHoldDuration
+	return tc.overlayNow().View != ""
 }
 
 func (tc *TrackerClient) recordPollSuccess() {

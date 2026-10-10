@@ -55,8 +55,11 @@ func TestCycleViewMode(t *testing.T) {
 			t.Errorf("getViewMode() = %q, want %q", tc.getViewMode(), "morning")
 		}
 
-		// Simulate 46 minutes passing
-		tc.manualViewTime = time.Now().Add(-46 * time.Minute)
+		// Simulate hold expiration passing
+		tc.mu.Lock()
+		tc.overlay.HoldUntil = time.Now().Add(-1 * time.Minute)
+		tc.overlay.FastUntil = time.Now().Add(-1 * time.Minute)
+		tc.mu.Unlock()
 		if tc.getViewMode() != "auto" {
 			t.Errorf("getViewMode() after hold = %q, want %q", tc.getViewMode(), "auto")
 		}
