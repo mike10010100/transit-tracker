@@ -12,52 +12,31 @@ Built for low-power e-ink wall displays and jailbroken Amazon Kindle devices (te
 
 ```mermaid
 flowchart TD
-    subgraph Cloud["External APIs"]
+    subgraph Cloud["External Transit Telemetry"]
+        direction LR
         NJT["NJ Transit BUSDV2 API"]
         GQL["NJ Transit GraphQL Fallback"]
-        GBFS["Citi Bike GBFS Feed"]
+        GBFS["Citi Bike GBFS Live Feed"]
     end
 
-    subgraph Host["Host Python Server (Mac / Linux / Raspberry Pi)"]
-        Tracker["bus_tracker.py & citibike.py (Live Telemetry Engine)"]
-        Renderer["render_dashboard.py (8-bit Grayscale Pillow Canvas)"]
-        Server["server.py (ThreadingHTTPServer on Port 8000)"]
-        Tracker --> Renderer --> Server
+    subgraph Host["Host Python Server (server/)"]
+        Ingest["Live Telemetry Ingestion (bus_tracker.py & citibike.py)"]
+        Canvas["8-bit Grayscale Canvas Renderer (render_dashboard.py)"]
+        HttpServer["HTTP & OTA Server on Port 8000 (server.py)"]
+        Ingest --> Canvas --> HttpServer
     end
 
-    subgraph Kindle["Kindle Paperwhite (PW5 Device)"]
-        Launcher["TransitTracker.sh (Bootstrap & Recovery Launcher)"]
-        
-        subgraph GoClient["tracker-arm (Native Go Client Subsystems)"]
-            Discovery["discovery.go (UDP Broadcast / mDNS / Subnet Sweep)"]
-            HttpEngine["client.go (Conditional HTTP Polling & ETag Cache)"]
-            Security["security.go (Ed25519 Verify & Constant-Time SHA-256)"]
-            Input["input.go (Evdev Touch Gestures & Power Key Events)"]
-            Display["display.go (E-Ink Framebuffer & eips Pipeline)"]
-            
-            Discovery --> HttpEngine
-            HttpEngine --> Security
-            Security --> Display
-            Input --> HttpEngine
-            Input --> Display
-        end
-
-        EIPS["Native E-Ink Framebuffer (/sys/class/graphics/fb0)"]
-        Touch["pt_mt Multi-Touch Digitizer (/dev/input/event1)"]
-        Power["bd71828-pwrkey Power Key (/dev/input/event0)"]
-
-        Launcher -->|Launch / Restart| GoClient
-        Display -->|Push Pixels| EIPS
-        Touch -->|Touch Events| Input
-        Power -->|Hardware Press| Input
-        Security -->|Verified OTA Upgrade| Launcher
+    subgraph Kindle["Kindle Paperwhite 5 (client-go/ & launcher/)"]
+        Client["tracker-arm Native Go Client (Conditional Polling & OTA Engine)"]
+        Pipeline["E-Ink Framebuffer & Touch Gesture Subsystems"]
+        Hardware["Kindle Hardware (/dev/fb0 Framebuffer & /dev/input Digitizer)"]
+        Client --> Pipeline --> Hardware
     end
 
-    NJT --> Tracker
-    GQL --> Tracker
-    GBFS --> Tracker
-    Server -->|"dashboard.png?kindle=pw5"| HttpEngine
-    Server -->|"tracker-arm (Signed Binary & Manifest)"| HttpEngine
+    NJT --> Ingest
+    GQL --> Ingest
+    GBFS --> Ingest
+    HttpServer ==>|"HTTP Polling (ETag 304) & Signed OTA"| Client
 ```
 
 The application version is defined once in [`VERSION`](VERSION). The Python
