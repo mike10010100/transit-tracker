@@ -2,5 +2,5 @@ requests>=2.32.3
 python-dotenv>=1.0.1
 pillow>=11.0.0
 zeroconf>=0.148.0
-gtfs-realtime-bindings>=1.0.0
+gtfs-realtime-bindings>=3.0.0
 cryptography>=42.0.0
