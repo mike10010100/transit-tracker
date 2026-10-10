@@ -848,6 +848,12 @@ func TestVerifyResponseAuth_Matrix(t *testing.T) {
 	if err := verifyResponseAuth(releasePub, nonce, path, resp, body); err != nil {
 		t.Fatalf("expected cached cert verification to succeed, got %v", err)
 	}
+
+	// 7. Tampered policy header fails verification
+	resp.Header.Set("X-Tracker-Policy", "v=1;phase=overnight;suspend=1")
+	if err := verifyResponseAuth(releasePub, nonce, path, resp, body); err == nil {
+		t.Error("expected tampered policy header to fail auth verification")
+	}
 }
 
 func TestLogUntrustedResponse_RateLimited(t *testing.T) {

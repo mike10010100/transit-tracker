@@ -28,9 +28,10 @@ func TestGetNextPollInterval(t *testing.T) {
 		}
 	})
 
-	t.Run("Manual boost expires after FastPollHoldDuration (10m)", func(t *testing.T) {
+	t.Run("Manual boost expires after fast poll hold", func(t *testing.T) {
 		tc.mu.Lock()
-		tc.lastDataInteraction = time.Now().Add(-11 * time.Minute)
+		tc.overlay.FastUntil = time.Now().Add(-11 * time.Minute)
+		tc.overlay.HoldUntil = time.Now().Add(-11 * time.Minute)
 		tc.mu.Unlock()
 
 		interval := tc.getNextPollInterval(600)
@@ -39,9 +40,11 @@ func TestGetNextPollInterval(t *testing.T) {
 		}
 	})
 
-	t.Run("Manual boost still active within FastPollHoldDuration", func(t *testing.T) {
+	t.Run("Manual boost still active within fast poll hold", func(t *testing.T) {
 		tc.mu.Lock()
-		tc.lastDataInteraction = time.Now().Add(-9 * time.Minute)
+		tc.overlay.FastUntil = time.Now().Add(5 * time.Minute)
+		tc.overlay.HoldUntil = time.Now().Add(5 * time.Minute)
+		tc.overlay.State = StateHold
 		tc.mu.Unlock()
 
 		if interval := tc.getNextPollInterval(600); interval != 60*time.Second {
@@ -49,14 +52,17 @@ func TestGetNextPollInterval(t *testing.T) {
 		}
 	})
 
-	t.Run("Fallback interval when server sends 0 uses local time", func(t *testing.T) {
+	t.Run("Fallback interval when server sends 0 uses local policy", func(t *testing.T) {
 		tc.mu.Lock()
-		tc.lastDataInteraction = time.Time{}
+		tc.overlay = Overlay{}
+		tc.policy = defaultPolicy()
+		tc.lastPollSec = 0
+		tc.consecutiveFailures = 0
 		tc.mu.Unlock()
 
 		interval := tc.getNextPollInterval(0)
-		if interval != 60*time.Second && interval != 10*time.Minute {
-			t.Errorf("Expected either 60s or 10m fallback, got %v", interval)
+		if interval != 60*time.Second {
+			t.Errorf("Expected 60s fallback on first poll, got %v", interval)
 		}
 	})
 }

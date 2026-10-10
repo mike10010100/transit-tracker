@@ -87,9 +87,7 @@ func runQuiet(ctx context.Context, name string, args ...string) {
 
 // cycleFrontlight advances brightness: Off (0) -> Cozy (8) -> Bright (18) -> Off (0)
 func (tc *TrackerClient) cycleFrontlight() {
-	tc.mu.Lock()
-	tc.manualLightTime = time.Now()
-	tc.mu.Unlock()
+	tc.interact(InteractionEvent{Kind: EvLightTap})
 
 	currStr := lipcGet("com.lab126.powerd", "flIntensity")
 	curr, _ := strconv.Atoi(currStr)

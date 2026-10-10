@@ -104,6 +104,7 @@ func (tc *TrackerClient) logUntrustedResponse(err error) {
 	}
 }
 
+// verifyResponseAuth authenticates a response (security spec §3).
 func verifyResponseAuth(releasePub ed25519.PublicKey, nonce, path string, resp *http.Response, bodyBytes []byte) error {
 	certHdr := resp.Header.Get(otasig.CertHeader)
 	if certHdr == "" {
@@ -429,8 +430,8 @@ func (tc *TrackerClient) fetchAndDrawDashboard(ctx context.Context, exitCancel c
 			tc.recordPollFailure(ctx)
 			return 0
 		}
-		if err := verifyResponseAuth(releasePub, nonce, "/dashboard.png", resp, bodyBytes); err != nil {
-			tc.logUntrustedResponse(err)
+		if errAuth := verifyResponseAuth(releasePub, nonce, "/dashboard.png", resp, bodyBytes); errAuth != nil {
+			tc.logUntrustedResponse(errAuth)
 			tc.recordPollFailure(ctx)
 			return 0
 		}
@@ -453,6 +454,7 @@ func (tc *TrackerClient) fetchAndDrawDashboard(ctx context.Context, exitCancel c
 	// HTTP 304: dashboard unchanged
 	if resp.StatusCode == http.StatusNotModified {
 		pollSec := parsePollInterval(resp.Header.Get("X-Kindle-Poll-Interval"))
+		tc.applyResponsePolicy(resp.Header.Get(PolicyHeader), pollSec)
 		tc.processControlHeaders(ctx, resp.Header)
 		if tc.maybeUpdateBinary(ctx, serverVer, serverSHA) {
 			return 0
@@ -464,6 +466,9 @@ func (tc *TrackerClient) fetchAndDrawDashboard(ctx context.Context, exitCancel c
 		return 0
 	}
 
+	serverPollSec := parsePollInterval(resp.Header.Get("X-Kindle-Poll-Interval"))
+	tc.applyResponsePolicy(resp.Header.Get(PolicyHeader), serverPollSec)
+
 	// Apply view
 	if resView := resp.Header.Get("X-Resolved-View"); resView != "" {
 		tc.mu.Lock()
@@ -472,8 +477,6 @@ func (tc *TrackerClient) fetchAndDrawDashboard(ctx context.Context, exitCancel c
 	}
 
 	tc.processControlHeaders(ctx, resp.Header)
-
-	serverPollSec := parsePollInterval(resp.Header.Get("X-Kindle-Poll-Interval"))
 
 	// Write dashboard image atomically via temp file in PrivateDir
 	_ = ensurePrivateDir()
@@ -543,11 +546,7 @@ func (tc *TrackerClient) processControlHeaders(ctx context.Context, header http.
 	}
 
 	// Commute auto-lighting control
-	tc.mu.Lock()
-	manualActive := time.Since(tc.manualLightTime) < ManualHoldDuration
-	tc.mu.Unlock()
-
-	if !manualActive {
+	if !tc.overlayNow().LightingHeld() {
 		brightStr := header.Get("X-Kindle-Brightness")
 		warmStr := header.Get("X-Kindle-Warmth")
 		currB := lipcGet("com.lab126.powerd", "flIntensity")
@@ -566,7 +565,7 @@ func (tc *TrackerClient) processControlHeaders(ctx context.Context, header http.
 
 // runPollLoop drives the fetch/OTA cycle until ctx is cancelled.
 func (tc *TrackerClient) runPollLoop(ctx context.Context, cancel context.CancelFunc, interval time.Duration) {
-	timer := time.NewTimer(alignDelay(time.Now(), interval))
+	timer := time.NewTimer(tc.nextPollDelay(time.Now(), interval))
 	defer timer.Stop()
 
 	reschedule := func(serverPollSec int) {
@@ -576,7 +575,7 @@ func (tc *TrackerClient) runPollLoop(ctx context.Context, cancel context.CancelF
 			default:
 			}
 		}
-		timer.Reset(alignDelay(time.Now(), tc.getNextPollInterval(serverPollSec)))
+		timer.Reset(tc.nextPollDelay(time.Now(), tc.getNextPollInterval(serverPollSec)))
 	}
 
 	for {

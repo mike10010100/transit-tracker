@@ -118,13 +118,27 @@ func (tc *TrackerClient) runSleepLoop(ctx context.Context, cancel context.Cancel
 			interval = tc.getNextPollInterval(serverPollSec)
 		}
 
-		if !allowSuspend || interval < minSuspendInterval {
-			tc.logRemote(fmt.Sprintf("Sleep mode: staying awake for %s.", interval.Round(time.Second)))
+		policy := tc.currentPolicy()
+		if !allowSuspend || !policy.Suspend || interval < minSuspendInterval {
+			tc.logRemote(fmt.Sprintf("Sleep mode: staying awake for %s (allow=%v, suspend=%v).", interval.Round(time.Second), allowSuspend, policy.Suspend))
 			if !tc.sleepWallClock(ctx, interval) {
 				tc.cleanup()
 				return
 			}
 			continue
+		}
+
+		wakeInterval := policy.clampToBoundary(time.Now(), interval)
+		if wakeInterval < minSuspendInterval {
+			tc.logRemote(fmt.Sprintf("Sleep mode: boundary wake in %s (< minSuspendInterval); staying awake.", wakeInterval.Round(time.Second)))
+			if !tc.sleepWallClock(ctx, wakeInterval) {
+				tc.cleanup()
+				return
+			}
+			continue
+		}
+		if wakeInterval < interval {
+			tc.logRemote(fmt.Sprintf("Sleep mode: clamped sleep interval %s -> %s (phase until %s).", interval.Round(time.Second), wakeInterval.Round(time.Second), policy.Until.Format("15:04")))
 		}
 
 		if !prepared {
@@ -138,24 +152,24 @@ func (tc *TrackerClient) runSleepLoop(ctx context.Context, cancel context.Cancel
 		// The power button is the wake source; pressing it starts an interaction
 		// session (detected below via a still-armed RTC alarm).
 		tc.releaseScreenSaver()
-		if !tc.armSysfsWake(interval) {
+		if !tc.armSysfsWake(wakeInterval) {
 			tc.logRemote("Sleep mode: could not arm RTC; wall-clock wait.")
 			tc.setWireless(true)
-			if !tc.sleepWallClock(ctx, interval) {
+			if !tc.sleepWallClock(ctx, wakeInterval) {
 				tc.cleanup()
 				return
 			}
 			continue
 		}
 
-		tc.logRemote(fmt.Sprintf("Sleep mode: suspending for %s (rtc armed, face=%s).", interval.Round(time.Second), tc.getPresentation()))
+		tc.logRemote(fmt.Sprintf("Sleep mode: suspending for %s (rtc armed, face=%s).", wakeInterval.Round(time.Second), tc.getPresentation()))
 		tc.setWireless(false)
 		time.Sleep(suspendSettleDelay)
 		elapsed, err := tc.enterSuspend()
 		tc.setWireless(true)
 		if err != nil {
 			tc.logRemote(fmt.Sprintf("Sleep mode: suspend failed (%v) after %s; wall-clock wait.", err, elapsed.Round(time.Second)))
-			if !tc.sleepWallClock(ctx, interval) {
+			if !tc.sleepWallClock(ctx, wakeInterval) {
 				tc.cleanup()
 				return
 			}
@@ -167,12 +181,14 @@ func (tc *TrackerClient) runSleepLoop(ctx context.Context, cancel context.Cancel
 		if tc.rtcAlarmStillArmed() {
 			tc.disarmRTC()
 			tc.logRemote(fmt.Sprintf("Power-button wake after %s: starting interactive session.", elapsed.Round(time.Second)))
-			tc.setInteracting(true)
-			if !tc.interactionAwake(ctx, cancel, interactionHoldDuration) {
+			sessionTimeout := policy.Session
+			if interactionHoldDuration != 90*time.Second || sessionTimeout == 0 {
+				sessionTimeout = interactionHoldDuration
+			}
+			if !tc.interactionAwake(ctx, cancel, sessionTimeout) {
 				tc.cleanup()
 				return
 			}
-			tc.setInteracting(false)
 			continue
 		}
 		tc.logRemote(fmt.Sprintf("Sleep mode: woke after %s.", elapsed.Round(time.Second)))

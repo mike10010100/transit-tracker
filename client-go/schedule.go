@@ -2,81 +2,104 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 )
 
 const (
+	// PeakPollInterval is also the fast-poll cadence and the first retry
+	// delay when no schedule is known.
 	PeakPollInterval = 60 * time.Second
-	EcoPollInterval  = 10 * time.Minute
+	// EcoPollInterval caps the retry backoff when no schedule is known.
+	EcoPollInterval = 10 * time.Minute
 	// Polls of a minute or more are aligned to the wall clock and delayed by
 	// this offset so the refresh lands just *after* the on-screen clock ticks
 	// over, rather than a hair before it.
 	PollSettleOffset = 500 * time.Millisecond
-	// FastPollHoldDuration bounds how long a *data-affecting* interaction
-	// (view switch / refresh) keeps the radio polling at the fast cadence.
-	// Screen-only actions (frontlight, exit) deliberately do not arm it.
-	FastPollHoldDuration = 10 * time.Minute
+	// The fast-poll hold armed by a *data-affecting* interaction (view switch
+	// / refresh) is the policy's `fast` (default 10 min, formerly
+	// FastPollHoldDuration). Screen-only actions (frontlight, exit)
+	// deliberately do not arm it.
 )
 
 // dataInteraction records a user action that changes what is fetched/rendered
-// (view switch or explicit refresh). It arms the fast-poll hold. Screen-only
-// actions (frontlight, exit) deliberately do not call this.
+// (explicit refresh). It arms the fast-poll hold. View switches arm it via
+// setExplicitViewMode; screen-only actions (frontlight, exit) deliberately do
+// not call this.
 func (tc *TrackerClient) dataInteraction() {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	tc.lastDataInteraction = time.Now()
+	tc.interact(InteractionEvent{Kind: EvDataTap})
 }
 
-// setInteractionLighting lights the panel for an interaction session and, while
-// on, suppresses the schedule auto-lighting. On session end (on=false) the
-// manual hold is cleared so the schedule lighting resumes (e.g. off overnight).
-func (tc *TrackerClient) setInteractionLighting(on bool) {
-	tc.mu.Lock()
-	if on {
-		tc.manualLightTime = time.Now()
-	} else {
-		tc.manualLightTime = time.Time{}
-	}
-	tc.mu.Unlock()
-	if !on {
+// applySessionLighting lights a dark panel to the policy's session level at
+// the start of a power-button session. While the overlay is in `session` the
+// schedule auto-lighting is suppressed; when the session ends it resumes
+// (e.g. off overnight).
+func (tc *TrackerClient) applySessionLighting() {
+	p := tc.currentPolicy()
+	if p.SessionBrightness <= 0 {
 		return
 	}
 	curr := lipcGet("com.lab126.powerd", "flIntensity")
 	if curr == "" || curr == "0" {
-		lipcSet("com.lab126.powerd", "flIntensity", "8")
-		lipcSet("com.lab126.powerd", "schedAmberLevel", "12")
+		lipcSet("com.lab126.powerd", "flIntensity", strconv.Itoa(p.SessionBrightness))
+		lipcSet("com.lab126.powerd", "schedAmberLevel", strconv.Itoa(p.SessionWarmth))
 		tc.logRemote(fmt.Sprintf("Interaction lighting on (was %q).", curr))
 	}
 }
 
 // noteTouch signals that the user touched the screen. Used to keep an awake
-// interaction session alive while the user is interacting, even for a tap that
-// only changes (say) the frontlight. Non-blocking.
+// interaction session (and any hold) alive while the user is interacting,
+// even for a tap that only changes (say) the frontlight. Non-blocking.
 func (tc *TrackerClient) noteTouch() {
+	tc.interact(InteractionEvent{Kind: EvTouch})
 	select {
 	case tc.touchCh <- struct{}{}:
 	default:
 	}
 }
 
+// getNextPollInterval picks the resident-mode poll interval: fast while the
+// overlay's fast-poll hold is active, else the server's advice, else a
+// fallback (see fallbackPollInterval).
 func (tc *TrackerClient) getNextPollInterval(serverIntervalSec int) time.Duration {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	if !tc.lastDataInteraction.IsZero() && time.Since(tc.lastDataInteraction) < FastPollHoldDuration {
+	now := time.Now()
+	o := tc.overlayNow()
+	if o.FastPoll(now) {
 		return PeakPollInterval
 	}
-
 	if serverIntervalSec > 0 {
 		return time.Duration(serverIntervalSec) * time.Second
 	}
+	tc.mu.Lock()
+	p, lastPoll, failures := tc.policy, tc.lastPollSec, tc.consecutiveFailures
+	tc.mu.Unlock()
+	return fallbackPollInterval(now, p, lastPoll, failures)
+}
 
-	now := time.Now()
-	hour := float64(now.Hour()) + float64(now.Minute())/60.0
-	if (hour >= 7.5 && hour < 9.5) || (hour >= 16.5 && hour < 19.0) {
-		return PeakPollInterval
+// fallbackPollInterval is used when a poll yielded no server interval (the
+// server was unreachable or the response was rejected). While the last
+// policy still describes the current phase, keep its cadence; otherwise
+// (no schedule known yet, or the phase has ended) retry at 60 s, doubling per
+// consecutive failure up to EcoPollInterval, so a reboot recovers quickly
+// without a dead server keeping a sleeping device awake.
+func fallbackPollInterval(now time.Time, p Policy, lastPollSec, failures int) time.Duration {
+	if lastPollSec > 0 && p.current(now) {
+		return time.Duration(lastPollSec) * time.Second
 	}
-	return EcoPollInterval
+	d := PeakPollInterval
+	for i := 1; i < failures && d < EcoPollInterval; i++ {
+		d *= 2
+	}
+	if d > EcoPollInterval {
+		d = EcoPollInterval
+	}
+	return d
+}
+
+// nextPollDelay is the resident-mode wait before the next poll: the interval
+// aligned to the wall clock, but never past the current phase's end.
+func (tc *TrackerClient) nextPollDelay(now time.Time, interval time.Duration) time.Duration {
+	return tc.currentPolicy().clampToBoundary(now, alignDelay(now, interval))
 }
 
 // alignDelay returns how long to wait (from `now`) so that the next poll lands

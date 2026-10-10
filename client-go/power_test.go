@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -756,5 +758,129 @@ func TestSleepWallClock_Branches(t *testing.T) {
 	cancel()
 	if tc.sleepWallClock(ctx, time.Hour) {
 		t.Error("expected false when context cancelled")
+	}
+}
+
+func TestRunSleepLoop_PolicySuspendFalseStaysAwake(t *testing.T) {
+	patchRuntime(t)
+	png := []byte{0x89, 0x50, 0x4E, 0x47}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Kindle-Poll-Interval", "600")
+		w.Header().Set("X-Tracker-Policy", "v=1;phase=peak;suspend=0;session=90;fast=600;hold=2700;sl=8,12")
+		w.WriteHeader(http.StatusOK)
+		w.Write(png)
+	}))
+	defer srv.Close()
+
+	GetBatteryInfo = func() BatteryInfo { return BatteryInfo{Level: 95} }
+	osCreate = tempFileCreate(t)
+	origCheck := checkNetworkFn
+	checkNetworkFn = func(context.Context) bool { return true }
+	defer func() { checkNetworkFn = origCheck }()
+
+	var suspendAttempted int32
+	osWriteFile = func(path string, data []byte, perm os.FileMode) error {
+		if path == powerStatePath && string(data) == "mem" {
+			atomic.StoreInt32(&suspendAttempted, 1)
+		}
+		return nil
+	}
+
+	tc := NewTrackerClient(srv.URL, "auto")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		tc.runSleepLoop(ctx, cancel, true) // allowSuspend=true, but policy says suspend=0
+		close(done)
+	}()
+
+	// Give it enough time to fetch and decide to stay awake on wall clock
+	time.Sleep(100 * time.Millisecond)
+	tc.refreshCh <- struct{}{} // wake it once to confirm loop is alive
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSleepLoop timed out")
+	}
+
+	if atomic.LoadInt32(&suspendAttempted) != 0 {
+		t.Error("expected suspend to be skipped when policy has suspend=0")
+	}
+}
+
+func TestRunSleepLoop_BoundaryClampedWake(t *testing.T) {
+	patchRuntime(t)
+	png := []byte{0x89, 0x50, 0x4E, 0x47}
+	untilEpoch := time.Now().Add(180 * time.Second).Unix()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Kindle-Poll-Interval", "600")
+		w.Header().Set("X-Tracker-Policy", fmt.Sprintf("v=1;phase=offpeak;until=%d;suspend=1;session=90;fast=600;hold=2700;sl=8,12", untilEpoch))
+		w.WriteHeader(http.StatusOK)
+		w.Write(png)
+	}))
+	defer srv.Close()
+
+	GetBatteryInfo = func() BatteryInfo { return BatteryInfo{Level: 90} }
+	osCreate = tempFileCreate(t)
+	origCheck := checkNetworkFn
+	checkNetworkFn = func(context.Context) bool { return true }
+	defer func() { checkNetworkFn = origCheck }()
+
+	origSettle := suspendSettleDelay
+	suspendSettleDelay = 0
+	defer func() { suspendSettleDelay = origSettle }()
+
+	var rtcArmedSec int
+	var rtcArmedMu sync.Mutex
+	osWriteFile = func(path string, data []byte, perm os.FileMode) error {
+		if path == sysfsWakeAlarmPath && strings.HasPrefix(string(data), "+") {
+			sec, _ := strconv.Atoi(string(data[1:]))
+			rtcArmedMu.Lock()
+			rtcArmedSec = sec
+			rtcArmedMu.Unlock()
+		}
+		return nil
+	}
+
+	tc := NewTrackerClient(srv.URL, "auto")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		tc.runSleepLoop(ctx, cancel, true)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		rtcArmedMu.Lock()
+		sec := rtcArmedSec
+		rtcArmedMu.Unlock()
+		if sec > 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSleepLoop timed out")
+	}
+
+	rtcArmedMu.Lock()
+	sec := rtcArmedSec
+	rtcArmedMu.Unlock()
+
+	// Should be clamped to ~180s instead of 600s
+	if sec <= 0 || sec > 200 {
+		t.Errorf("expected RTC alarm clamped to ~180s (near boundary), got +%ds", sec)
 	}
 }
