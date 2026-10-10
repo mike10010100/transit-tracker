@@ -1,4 +1,4 @@
-.PHONY: all check test test-go test-py test-sh fuzz mutate-py lint lint-go lint-py vet fmt fmt-go fmt-py fmt-check fmt-go-check fmt-py-check audit audit-go audit-py coverage coverage-go coverage-py check-sh build keygen pubkey verify-release deploy clean
+.PHONY: all check test test-go test-py test-sh fuzz mutate-py lint lint-go lint-py vet fmt fmt-go fmt-py fmt-check fmt-go-check fmt-py-check audit audit-go audit-py coverage coverage-go coverage-py check-sh check-mermaid build keygen pubkey verify-release deploy clean
 
 SHELL := /bin/bash
 
@@ -46,7 +46,7 @@ vet:
 	@echo "==> Running go vet static analysis..."
 	@cd client-go && go vet ./...
 
-lint: lint-go lint-py check-sh
+lint: lint-go lint-py check-sh check-mermaid
 
 lint-go: vet
 	@if command -v golangci-lint >/dev/null 2>&1; then \
@@ -58,7 +58,7 @@ lint-py:
 	@echo "==> Running Python static type checker (mypy)..."
 	@$(PYTHON) -m mypy server
 	@echo "==> Running Python linter (ruff)..."
-	@$(PYTHON) -m ruff check server tests
+	@$(PYTHON) -m ruff check server tests scripts
 
 fmt: fmt-go fmt-py
 
@@ -68,7 +68,7 @@ fmt-go:
 
 fmt-py:
 	@echo "==> Formatting Python files with ruff..."
-	@$(PYTHON) -m ruff format server tests
+	@$(PYTHON) -m ruff format server tests scripts
 
 fmt-check: fmt-go-check fmt-py-check
 
@@ -83,7 +83,7 @@ fmt-go-check:
 
 fmt-py-check:
 	@echo "==> Checking Python formatting (ruff)..."
-	@$(PYTHON) -m ruff format --check server tests
+	@$(PYTHON) -m ruff format --check server tests scripts
 
 check-sh:
 	@echo "==> Checking shell scripts syntax..."
@@ -96,6 +96,10 @@ check-sh:
 		shellcheck -s bash scripts/check_coverage_go.sh scripts/deploy.sh tests/test_launcher.sh; \
 		shellcheck -s sh $(LAUNCHER); \
 	fi
+
+check-mermaid:
+	@echo "==> Validating Mermaid diagrams in documentation..."
+	@$(PYTHON) scripts/check_mermaid.py
 
 audit: audit-go audit-py
 

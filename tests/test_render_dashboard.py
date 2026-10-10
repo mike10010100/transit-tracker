@@ -626,9 +626,22 @@ class TestScaledDraw(unittest.TestCase):
     def test_untagged_font_is_passed_through(self):
         # A font without the transit tags cannot be rescaled; it is used as-is.
         img, sd, real = self._proxy(2.0)
-        plain = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12
-        )
+        font_paths = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/Library/Fonts/Arial.ttf",
+        ]
+        plain = None
+        for p in font_paths:
+            if os.path.exists(p):
+                try:
+                    plain = ImageFont.truetype(p, 12)
+                    break
+                except Exception:
+                    continue
+        if plain is None:
+            plain = ImageFont.load_default()
         self.assertIs(sd._font(plain), plain)
 
     def test_none_font_is_passed_through(self):
