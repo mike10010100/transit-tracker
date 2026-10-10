@@ -1,7 +1,38 @@
+"""
+Legacy schedule API, now a thin facade over the configurable state machine in
+``state_machine.py``. Existing callers keep working; new code should use
+``get_schedule_state()`` and read the fields it needs from one resolved state.
+"""
+
 import os
-import sys
-from datetime import datetime
-from typing import NamedTuple, Optional
+from dataclasses import replace
+from datetime import datetime, timedelta
+from typing import Any, NamedTuple, Optional
+
+import state_machine
+from state_machine import (
+    MAX_POLL_INTERVAL,
+    MIN_POLL_INTERVAL,
+    ConfigStore,
+    ResolvedState,
+)
+
+__all__ = [
+    "MAX_POLL_INTERVAL",
+    "MIN_POLL_INTERVAL",
+    "STORE",
+    "CommuteLighting",
+    "_parse_hour_env",
+    "get_commute_lighting",
+    "get_policy_header",
+    "get_presentation",
+    "get_schedule_report",
+    "get_schedule_state",
+    "get_status_note",
+    "get_target_poll_interval",
+    "is_overnight_hours",
+    "is_peak_commute_hours",
+]
 
 
 class CommuteLighting(NamedTuple):
@@ -21,183 +52,111 @@ def _parse_hour_env(name: str, default: float) -> float:
         return default
 
 
-# Peak commute windows are configurable so the schedule can be tuned without a
-# code change (e.g. extending the morning window while testing on the device).
-PEAK_AM_START = _parse_hour_env("PEAK_AM_START", 7.5)
-PEAK_AM_END = _parse_hour_env("PEAK_AM_END", 9.5)
-PEAK_PM_START = _parse_hour_env("PEAK_PM_START", 16.5)
-PEAK_PM_END = _parse_hour_env("PEAK_PM_END", 19.0)
-# Weekends are off-peak (no commute: light off, slow polling) unless
-# PEAK_WEEKENDS=1.
-PEAK_WEEKENDS = os.environ.get("PEAK_WEEKENDS", "").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
+# The process-wide config store. Tests swap it with patch.object(schedule,
+# "STORE", ConfigStore(...)); every accessor below reads it at call time.
+STORE = ConfigStore()
+
+
+def get_schedule_state(dt: Optional[datetime] = None) -> ResolvedState:
+    """Resolves the full schedule state (phase + parameters) at ``dt``."""
+    return STORE.resolve(dt)
+
+
+def _unforced(dt: Optional[datetime]) -> ResolvedState:
+    """Resolves ignoring FORCE_FAST_POLL (which never affected these)."""
+    cfg = STORE.get()
+    if cfg.force_fast_poll:
+        cfg = replace(cfg, force_fast_poll=False)
+    return state_machine.resolve(cfg, dt)
 
 
 def is_peak_commute_hours(dt: Optional[datetime] = None) -> bool:
     """
-    Returns True during peak commute windows in Hoboken, NJ. Defaults:
-    - Morning commute: 7:30 AM - 9:30 AM
-    - Evening commute: 4:30 PM - 7:00 PM (16:30 - 19:00)
-    Override with PEAK_AM_START/PEAK_AM_END/PEAK_PM_START/PEAK_PM_END.
-    Saturdays and Sundays are never peak unless PEAK_WEEKENDS=1.
+    True while the active phase is interactive (by default the weekday peak
+    commute windows 07:30-09:30 and 16:30-19:00).
     """
-    if dt is None:
-        dt = datetime.now()
-    if dt.weekday() >= 5 and not PEAK_WEEKENDS:
-        return False
-    hour = dt.hour + dt.minute / 60.0
-    return (PEAK_AM_START <= hour < PEAK_AM_END) or (
-        PEAK_PM_START <= hour < PEAK_PM_END
-    )
-
-
-def get_commute_lighting(dt: Optional[datetime] = None) -> CommuteLighting:
-    """
-    Returns (brightness, warmth) for the Hoboken, NJ local time.
-    A cozy ambient glow (8, 12) is used during the peak morning and evening
-    commute windows; the frontlight is off (0, 0) off-peak and overnight to
-    save battery. This is a fixed schedule, not sunrise/sunset calculation.
-    """
-    if is_peak_commute_hours(dt=dt):
-        return CommuteLighting(8, 12)
-    return CommuteLighting(0, 0)
-
-
-# When set (any non-empty value), the server always advertises the fast poll
-# interval regardless of the time of day. For testing only.
-FORCE_FAST_POLL = os.environ.get("FORCE_FAST_POLL", "").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-
-# Overnight "deep eco" window: a long poll interval while nobody is commuting.
-# The window may wrap past midnight (start > end).
-OVERNIGHT_START = _parse_hour_env("OVERNIGHT_START", 22.0)
-OVERNIGHT_END = _parse_hour_env("OVERNIGHT_END", 6.0)
-# Poll intervals advertised to clients are clamped to [30 s, 2 h]: a 0 or
-# negative value would make clients spin, a huge one would freeze the board.
-MIN_POLL_INTERVAL = 30
-MAX_POLL_INTERVAL = 7200
-
-
-def _parse_interval_env(name: str, default: int) -> int:
-    """Parses a poll-interval env var (seconds), clamped to the allowed range."""
-    value = int(_parse_hour_env(name, float(default)))
-    return max(MIN_POLL_INTERVAL, min(MAX_POLL_INTERVAL, value))
-
-
-OVERNIGHT_INTERVAL = _parse_interval_env("OVERNIGHT_INTERVAL", 3600)
-OFFPEAK_INTERVAL = _parse_interval_env("OFFPEAK_INTERVAL", 600)
+    return _unforced(dt).presentation == "interactive"
 
 
 def is_overnight_hours(dt: Optional[datetime] = None) -> bool:
-    """
-    Returns True inside the overnight deep-eco window (default 22:00-06:00).
-    Handles a window that wraps past midnight.
-    """
-    server_mod = sys.modules.get("server")
-    start = (
-        getattr(server_mod, "OVERNIGHT_START", OVERNIGHT_START)
-        if server_mod
-        else OVERNIGHT_START
-    )
-    end = (
-        getattr(server_mod, "OVERNIGHT_END", OVERNIGHT_END)
-        if server_mod
-        else OVERNIGHT_END
-    )
-    if dt is None:
-        dt = datetime.now()
-    hour = dt.hour + dt.minute / 60.0
-    if start <= end:
-        return start <= hour < end
-    return hour >= start or hour < end
+    """True while the active phase is dormant (by default 22:00-06:00)."""
+    return _unforced(dt).presentation == "dormant"
 
 
-def is_force_fast_poll() -> bool:
-    """Checks whether FORCE_FAST_POLL is enabled."""
-    server_mod = sys.modules.get("server")
-    if server_mod and getattr(server_mod, "FORCE_FAST_POLL", False):
-        return True
-    return bool(FORCE_FAST_POLL)
+def get_commute_lighting(dt: Optional[datetime] = None) -> CommuteLighting:
+    """Returns (brightness, warmth) configured for the active phase."""
+    light = _unforced(dt).lighting
+    return CommuteLighting(light.brightness, light.warmth)
 
 
 def get_presentation(dt: Optional[datetime] = None) -> str:
     """
-    Returns the client-facing presentation state:
-    - "interactive" during peak commute: the client stays awake, so the panel is
-      a live, tappable dashboard with buttons.
-    - "idle" off-peak daytime: the client deep-suspends between polls and a tap
-      cannot wake the SoC, so the panel shows an inert "press power" strip.
-    - "dormant" overnight (22:00-06:00): deep-suspend with an inert "sleeping"
-      face; a power press still starts an interaction session.
-
-    A client may override to "interactive" while it is awake in a power-button
-    interaction session (see the ?present= param).
-
-    FORCE_FAST_POLL=1 (testing) forces "interactive" so experiments are unaffected.
+    Returns the client-facing presentation state of the active phase:
+    "interactive", "idle" or "dormant". FORCE_FAST_POLL=1 forces "interactive".
+    A client may still override to "interactive" while it is awake in a
+    power-button interaction session (see the ?present= param).
     """
-    if is_force_fast_poll():
-        return "interactive"
-    if is_peak_commute_hours(dt=dt):
-        return "interactive"
-    if is_overnight_hours(dt=dt):
-        return "dormant"
-    return "idle"
+    return get_schedule_state(dt).presentation
 
 
-def get_dormant_note() -> str:
-    """
-    Human-readable label for the dormant overnight strip, announcing when the
-    dashboard wakes (the overnight window end).
-    """
-    server_mod = sys.modules.get("server")
-    end = (
-        getattr(server_mod, "OVERNIGHT_END", OVERNIGHT_END)
-        if server_mod
-        else OVERNIGHT_END
-    )
-    # Round to the nearest minute first so e.g. 6.999 reads 7:00, not 6:00.
-    total_minutes = int(round(end * 60)) % (24 * 60)
-    hour, minute = divmod(total_minutes, 60)
-    suffix = "AM" if hour < 12 else "PM"
-    hour12 = hour % 12 or 12
-    return (
-        f"SLEEPING — back at {hour12}:{minute:02d} {suffix} · press power to interact"
-    )
-
-
-def get_status_note(presentation: str) -> str:
-    """
-    Bottom-strip label for a non-interactive presentation (idle/dormant).
-    """
-    if presentation == "dormant":
-        return get_dormant_note()
-    if presentation == "idle":
-        return "PRESS POWER BUTTON TO INTERACT"
-    return ""
+def get_status_note(presentation: str, dt: Optional[datetime] = None) -> str:
+    """Bottom-strip label for a non-interactive presentation (idle/dormant)."""
+    if dt is None:
+        dt = datetime.now()
+    return state_machine.phase_note(STORE.get(), presentation, dt)
 
 
 def get_target_poll_interval(dt: Optional[datetime] = None) -> int:
-    """
-    Returns target Kindle poll interval in seconds:
-    - 60s during peak commute rush (the client aligns this to the top of each
-      minute, so the on-screen clock rolls exactly when the new data lands)
-    - 3600s (1 hour) overnight deep-eco mode
-    - 600s (10 min) off-peak Eco Mode
+    """Returns the poll interval (seconds) configured for the active phase."""
+    return get_schedule_state(dt).poll_interval
 
-    FORCE_FAST_POLL=1 forces the fast interval at all times (testing aid).
+
+def get_policy_header(state: ResolvedState) -> str:
+    """The X-Tracker-Policy value for ``state`` under the active config."""
+    return state_machine.format_policy_header(state, STORE.get())
+
+
+def _iso(dt: Optional[datetime]) -> Optional[str]:
+    return dt.isoformat(timespec="seconds") if dt is not None else None
+
+
+def get_schedule_report(
+    dt: Optional[datetime] = None, horizon: timedelta = timedelta(hours=24)
+) -> dict[str, Any]:
     """
-    if is_force_fast_poll():
-        return 60
-    if is_peak_commute_hours(dt=dt):
-        return 60
-    if is_overnight_hours(dt=dt):
-        return OVERNIGHT_INTERVAL
-    return OFFPEAK_INTERVAL
+    Debug view for GET /schedule: config source and any load error, the
+    current resolved state, upcoming transitions and the effective config.
+    """
+    if dt is None:
+        dt = datetime.now()
+    cfg = STORE.get()
+    state = state_machine.resolve(cfg, dt)
+    return {
+        "source": STORE.source,
+        "path": STORE.path,
+        "error": STORE.error or None,
+        "now": _iso(dt),
+        "current": {
+            "phase": state.phase,
+            "presentation": state.presentation,
+            "status_note": state.status_note,
+            "poll_interval": state.poll_interval,
+            "lighting": {
+                "brightness": state.lighting.brightness,
+                "warmth": state.lighting.warmth,
+            },
+            "realtime": state.realtime,
+            "suspend": state.suspend,
+            "view": state.view,
+            "until": _iso(state.until),
+        },
+        "transitions": [
+            {"at": _iso(t), "phase": name}
+            for t, name in state_machine.upcoming_transitions(cfg, dt, horizon)
+        ],
+        "config": cfg.to_dict(),
+        "overrides": {
+            "force_phase": cfg.force_phase or None,
+            "force_fast_poll": cfg.force_fast_poll,
+        },
+    }

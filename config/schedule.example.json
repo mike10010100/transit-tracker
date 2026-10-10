@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "default_phase": "offpeak",
+  "phases": {
+    "peak": {
+      "poll_interval": 60,
+      "presentation": "interactive",
+      "status_note": "",
+      "lighting": { "brightness": 8, "warmth": 12 },
+      "realtime": true,
+      "suspend": false
+    },
+    "offpeak": {
+      "poll_interval": 600,
+      "presentation": "idle",
+      "status_note": "PRESS POWER BUTTON TO INTERACT",
+      "lighting": { "brightness": 0, "warmth": 0 },
+      "realtime": true,
+      "suspend": true
+    },
+    "overnight": {
+      "poll_interval": 3600,
+      "presentation": "dormant",
+      "status_note": "SLEEPING — back at {until} · press power to interact",
+      "lighting": { "brightness": 0, "warmth": 0 },
+      "realtime": false,
+      "suspend": true
+    }
+  },
+  "windows": [
+    { "phase": "peak", "days": ["mon", "tue", "wed", "thu", "fri"], "start": "07:30", "end": "09:30", "view": "morning" },
+    { "phase": "peak", "days": ["mon", "tue", "wed", "thu", "fri"], "start": "16:30", "end": "19:00", "view": "evening" },
+    { "phase": "overnight", "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "start": "22:00", "end": "06:00" }
+  ],
+  "interaction": {
+    "session_timeout": 90,
+    "session_lighting": { "brightness": 8, "warmth": 12 },
+    "fast_poll_hold": 600,
+    "hold": 2700
+  }
+}

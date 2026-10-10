@@ -16,8 +16,10 @@ from unittest.mock import patch
 
 import discovery
 import ota
+import schedule
 from PIL import Image
-from test_server_http import ServerHTTPTestBase, _http_get
+from state_machine import ConfigStore
+from test_server_http import ServerHTTPTestBase, _auth_headers, _http_get
 
 import server
 from server import format_for_kindle, sha256_file
@@ -251,9 +253,7 @@ class TestDiscoveryAndLighting(unittest.TestCase):
     def test_presentation_by_schedule(self):
         from datetime import datetime
 
-        saved = server.FORCE_FAST_POLL
-        server.FORCE_FAST_POLL = False
-        try:
+        with patch.object(schedule, "STORE", _store()):
             self.assertEqual(
                 server.get_presentation(datetime(2026, 1, 1, 8, 0)), "interactive"
             )
@@ -266,8 +266,6 @@ class TestDiscoveryAndLighting(unittest.TestCase):
             self.assertEqual(
                 server.get_presentation(datetime(2026, 1, 1, 2, 0)), "dormant"
             )
-        finally:
-            server.FORCE_FAST_POLL = saved
 
     def test_status_notes(self):
         self.assertIn("SLEEPING", server.get_status_note("dormant"))
@@ -278,11 +276,14 @@ class TestDiscoveryAndLighting(unittest.TestCase):
         self.assertEqual(server.get_status_note("interactive"), "")
 
 
+def _store(**env):
+    """A ConfigStore with built-in defaults plus ``env`` (no file, no host env)."""
+    return ConfigStore(path="", env=env, log=lambda *_: None)
+
+
 class TestPresentationOverHTTP(ServerHTTPTestBase):
     def test_dashboard_advertises_presentation_header(self):
-        saved = server.FORCE_FAST_POLL
-        server.FORCE_FAST_POLL = False
-        try:
+        with patch.object(schedule, "STORE", _store()):
             status, headers, _ = _http_get(
                 self.port, "/dashboard.png?mock=1&kindle=pw5"
             )
@@ -291,33 +292,122 @@ class TestPresentationOverHTTP(ServerHTTPTestBase):
             self.assertIn(
                 headers["X-Tracker-Presentation"], ("interactive", "idle", "dormant")
             )
-        finally:
-            server.FORCE_FAST_POLL = saved
 
     def test_dashboard_present_override_is_interactive(self):
-        saved = server.FORCE_FAST_POLL
-        server.FORCE_FAST_POLL = False
-        try:
+        with patch.object(schedule, "STORE", _store(FORCE_PHASE="overnight")):
             status, headers, _ = _http_get(
                 self.port, "/dashboard.png?mock=1&kindle=pw5&present=interactive"
             )
             self.assertEqual(status, 200)
             self.assertEqual(headers.get("X-Tracker-Presentation"), "interactive")
-        finally:
-            server.FORCE_FAST_POLL = saved
 
     def test_dashboard_renders_dormant_when_overnight(self):
-        saved = server.get_presentation
-        server.get_presentation = lambda dt=None: "dormant"
-        try:
+        with patch.object(schedule, "STORE", _store(FORCE_PHASE="overnight")):
             status, headers, body = _http_get(
                 self.port, "/dashboard.png?mock=1&kindle=pw5"
             )
             self.assertEqual(status, 200)
             self.assertEqual(headers.get("X-Tracker-Presentation"), "dormant")
+            self.assertEqual(headers.get("X-Kindle-Poll-Interval"), "3600")
+            self.assertEqual(headers.get("X-Kindle-Brightness"), "0")
             self.assertTrue(len(body) > 0)
+
+    def test_phase_parameters_drive_headers(self):
+        with patch.object(schedule, "STORE", _store(FORCE_PHASE="peak")):
+            status, headers, _ = _http_get(
+                self.port, "/dashboard.png?mock=1&kindle=pw5"
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(headers.get("X-Tracker-Presentation"), "interactive")
+            self.assertEqual(headers.get("X-Kindle-Poll-Interval"), "60")
+            self.assertEqual(headers.get("X-Kindle-Brightness"), "8")
+            self.assertEqual(headers.get("X-Kindle-Warmth"), "12")
+
+    def test_policy_header_present(self):
+        with patch.object(schedule, "STORE", _store(FORCE_PHASE="peak")):
+            _s, headers, _ = _http_get(self.port, "/dashboard.png?mock=1&kindle=pw5")
+            self.assertEqual(
+                headers.get("X-Tracker-Policy"),
+                "v=1;phase=peak;suspend=0;session=90;fast=600;hold=2700;sl=8,12",
+            )
+
+    def test_policy_header_on_304(self):
+        with patch.object(schedule, "STORE", _store(FORCE_PHASE="offpeak")):
+            _s, first, _ = _http_get(self.port, "/dashboard.png?mock=1")
+            status, second, _ = _http_get(
+                self.port,
+                "/dashboard.png?mock=1",
+                headers={"If-None-Match": first["ETag"]},
+            )
+            self.assertEqual(status, 304)
+            self.assertIn("phase=offpeak", second.get("X-Tracker-Policy", ""))
+            self.assertIn("suspend=1", second.get("X-Tracker-Policy", ""))
+
+    def test_auto_view_follows_window_view(self):
+        cfg_dir = tempfile.mkdtemp()
+        path = os.path.join(cfg_dir, "schedule.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "windows": [
+                        {
+                            "phase": "peak",
+                            "start": "00:00",
+                            "end": "24:00",
+                            "view": "morning",
+                        }
+                    ]
+                },
+                f,
+            )
+        store = ConfigStore(path=path, env={}, log=lambda *_: None)
+        try:
+            with patch.object(schedule, "STORE", store):
+                _s, auto_headers, _ = _http_get(
+                    self.port, "/dashboard.png?mock=1&kindle=pw5&view=auto"
+                )
+                self.assertEqual(auto_headers.get("X-Resolved-View"), "morning")
+                self.assertEqual(auto_headers.get("X-Tracker-View"), "auto")
+                # An explicit view still wins over the window's view.
+                _s, explicit, _ = _http_get(
+                    self.port, "/dashboard.png?mock=1&kindle=pw5&view=evening"
+                )
+                self.assertEqual(explicit.get("X-Resolved-View"), "evening")
         finally:
-            server.get_presentation = saved
+            os.remove(path)
+            os.rmdir(cfg_dir)
+
+
+class TestScheduleEndpoint(ServerHTTPTestBase):
+    def test_requires_token(self):
+        status, _headers, _body = _http_get(self.port, "/schedule")
+        self.assertEqual(status, 403)
+        status, _headers, _body = _http_get(
+            self.port, "/schedule", headers={"X-Tracker-Token": "wrong"}
+        )
+        self.assertEqual(status, 403)
+
+    def test_report_contents(self):
+        with patch.object(schedule, "STORE", _store(FORCE_PHASE="overnight")):
+            status, headers, body = _http_get(
+                self.port, "/schedule", headers=_auth_headers()
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Content-Type"), "application/json")
+        report = json.loads(body)
+        self.assertEqual(report["current"]["phase"], "overnight")
+        self.assertEqual(report["current"]["presentation"], "dormant")
+        self.assertIsNone(report["current"]["until"])
+        self.assertEqual(report["overrides"]["force_phase"], "overnight")
+        self.assertEqual(report["transitions"], [])
+        self.assertIn("peak", report["config"]["phases"])
+        self.assertIsNone(report["error"])
+
+    def test_panel_shows_phase(self):
+        with patch.object(schedule, "STORE", _store(FORCE_PHASE="peak")):
+            status, _headers, body = _http_get(self.port, "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Phase: <strong>peak</strong>", body)
 
 
 class TestMdnsAdvertiser(unittest.TestCase):

@@ -71,6 +71,7 @@ also_copy = [
     "server/render_dashboard.py",
     "server/schedule.py",
     "server/server.py",
+    "server/state_machine.py",
     "server/version.py",
     "client-go/",
 ]

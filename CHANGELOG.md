@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.36.0] - 2026-10-10
+
+### Added
+
+- **Configurable Schedule State Machine** (`server/state_machine.py`): the peak/off-peak/overnight schedule is now a declarative state machine. Named phases set the poll interval, presentation, status-strip text (with an `{until}` placeholder), frontlight, realtime feeds and suspend permission. Ordered, day-of-week-aware windows select the phase (first match wins; windows that wrap past midnight belong to the day they start on). Windows can also set the `auto` view.
+- **`schedule.json` Configuration**: loaded from `$SCHEDULE_CONFIG` (default `/app/config/schedule.json`) and deep-merged onto the built-in defaults, so only changed keys are needed. It is hot-reloaded when its mtime changes. Validation is strict and fail-safe: an invalid file is rejected as a whole and the last good config stays active. Includes `config/schedule.example.json`.
+- **`GET /schedule`** (requires `X-Tracker-Token`): config source, any load error, the current phase and its end, the next 24 h of transitions, and the effective config.
+- **Response Format `transit-tracker-resp-v2` and `X-Tracker-Policy`**: responses include a cryptographically signed `X-Tracker-Policy` header carrying the phase, next transition timestamp (`until`), suspend permission, and interaction-overlay timeouts. Shared response test vector updated.
+- **`FORCE_PHASE`** testing override to pin a phase.
+- Control panel shows the current phase and when it ends.
+
+### Changed
+
+- `server/schedule.py` is now a backward-compatible facade over the state machine. Presentation, poll interval, lighting, status note and realtime gating for a request all come from one resolved state. The `sys.modules["server"]` monkeypatch hooks and the module-level `FORCE_FAST_POLL` / `OVERNIGHT_*` constants are removed.
+- `docker-compose.yml` passes the legacy schedule env vars through only when they are set. Previously their hardcoded defaults would have overridden `schedule.json`. The compose file also mounts `./config` read-only.
+- The legacy env vars (`PEAK_*`, `OVERNIGHT_*`, `OFFPEAK_INTERVAL`, `OVERNIGHT_INTERVAL`) still work and take precedence over the file. A property test checks them against the historical logic.
+
+---
+
 ## [1.35.13] - 2026-10-10
 
 ### Fixed
@@ -20,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Architecture Overview Diagram Layout**: Redesigned the Mermaid architecture diagram in `README.md` into a vertically aligned 3-tier structure (External Transit Telemetry -> Host Python Server -> Kindle Paperwhite 5). Eliminates side-by-side subgraph crowding, crooked edges, and overlapping labels for a clean, readable presentation.
 
+---
+
 ## [1.35.11] - 2026-10-10
 
 ### Added
@@ -31,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **README Architecture Overview Diagram**: Wrapped edge labels containing parentheses and special characters (`(Signed Binary & Manifest)`) in double quotes, fixing GitHub rich render parser error (`got 'PS'`).
 - **Cross-Platform Test Font & Stress Resilience**: Updated font fallback paths in `tests/test_render_dashboard.py` and connection retry backlog handling in `tests/test_challenger_m2_harness.py` for macOS compatibility.
+
+---
 
 ## [1.35.10] - 2026-10-10
 

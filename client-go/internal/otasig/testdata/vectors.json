@@ -22,13 +22,14 @@
       "etag": "\"abc\"",
       "x-kindle-poll-interval": "60",
       "x-resolved-view": "evening",
+      "x-tracker-policy": "v=1;phase=peak;until=1760103000;suspend=0;session=90;fast=600;hold=2700;sl=8,12",
       "x-tracker-presentation": "interactive",
       "x-tracker-view": "auto"
     },
-    "message": "transit-tracker-resp-v1\nnonce=000102030405060708090a0b0c0d0e0f\npath=/dashboard.png\nstatus=200\nbody-sha256=796120837694d3f3f29259cfeb25091698c2a0aa87873658d840b4993ee889b3\netag=\"abc\"\nx-kindle-poll-interval=60\nx-tracker-presentation=interactive\nx-tracker-mode=\nx-tracker-action=\nx-tracker-diag=\nx-kindle-brightness=\nx-kindle-warmth=\nx-tracker-version=\nx-tracker-sha256=\nx-resolved-view=evening\nx-tracker-view=auto",
+    "message": "transit-tracker-resp-v2\nnonce=000102030405060708090a0b0c0d0e0f\npath=/dashboard.png\nstatus=200\nbody-sha256=796120837694d3f3f29259cfeb25091698c2a0aa87873658d840b4993ee889b3\netag=\"abc\"\nx-kindle-poll-interval=60\nx-tracker-presentation=interactive\nx-tracker-mode=\nx-tracker-action=\nx-tracker-diag=\nx-kindle-brightness=\nx-kindle-warmth=\nx-tracker-version=\nx-tracker-sha256=\nx-resolved-view=evening\nx-tracker-view=auto\nx-tracker-policy=v=1;phase=peak;until=1760103000;suspend=0;session=90;fast=600;hold=2700;sl=8,12",
     "nonce": "000102030405060708090a0b0c0d0e0f",
     "path": "/dashboard.png",
-    "signature": "IJclhxV9N4ZonPdHdy1yoMn5tbIcRlL6vx0qyYONslxvoRARn6JTQ5IbPnpEVi+fnIt+DIXGW0XZNN37qNXWDQ==",
+    "signature": "Z15Rb/uIfyDzfuIwJnEKOaKjWDokpwI7v1bfwym0EERi7uMgvIWZPolkG9AvRu4UtNuA3Luvrn5d3QUE648YBg==",
     "signed_headers": [
       "etag",
       "x-kindle-poll-interval",
@@ -41,7 +42,8 @@
       "x-tracker-version",
       "x-tracker-sha256",
       "x-resolved-view",
-      "x-tracker-view"
+      "x-tracker-view",
+      "x-tracker-policy"
     ],
     "status": 200
   },

@@ -29,7 +29,7 @@ import (
 const (
 	ManifestFormat = "transit-tracker-ota-v1"
 	CertFormat     = "transit-tracker-server-v1"
-	ResponseFormat = "transit-tracker-resp-v1"
+	ResponseFormat = "transit-tracker-resp-v2"
 )
 
 // Size bounds shared by the client and the build tooling.
@@ -62,6 +62,7 @@ var SignedHeaders = []string{
 	"x-tracker-sha256",
 	"x-resolved-view",
 	"x-tracker-view",
+	"x-tracker-policy",
 }
 
 var (

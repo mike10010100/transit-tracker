@@ -33,20 +33,26 @@ services:
       # one is generated on first start, stored in the cache volume and printed
       # to the container log.
       - TRACKER_CONTROL_TOKEN=${TRACKER_CONTROL_TOKEN:-}
-      # Peak commute windows (decimal hours), overridable without a rebuild.
-      - PEAK_AM_START=${PEAK_AM_START:-7.5}
-      - PEAK_AM_END=${PEAK_AM_END:-9.5}
-      - PEAK_PM_START=${PEAK_PM_START:-16.5}
-      - PEAK_PM_END=${PEAK_PM_END:-19.0}
-      # Weekends are off-peak unless this is 1.
-      - PEAK_WEEKENDS=${PEAK_WEEKENDS:-0}
-      # Overnight deep-eco window and its long poll interval (seconds).
-      - OVERNIGHT_START=${OVERNIGHT_START:-22.0}
-      - OVERNIGHT_END=${OVERNIGHT_END:-6.0}
-      - OVERNIGHT_INTERVAL=${OVERNIGHT_INTERVAL:-3600}
-      - OFFPEAK_INTERVAL=${OFFPEAK_INTERVAL:-600}
-      # Testing aid: force the fast poll interval at all hours.
+      # Schedule: copy config/schedule.example.json to config/schedule.json and
+      # edit it (hot-reloaded, no restart). See docs/architecture.md.
+      - SCHEDULE_CONFIG=${SCHEDULE_CONFIG:-/app/config/schedule.json}
+      # Legacy schedule overrides. They take precedence over schedule.json, so
+      # they are passed through only when set (empty = unset). Prefer the file.
+      #   PEAK_AM_START/END, PEAK_PM_START/END: peak windows (decimal hours)
+      #   PEAK_WEEKENDS=1: weekend peaks; OVERNIGHT_START/END: overnight window
+      #   OFFPEAK_INTERVAL / OVERNIGHT_INTERVAL: poll intervals (seconds)
+      - PEAK_AM_START=${PEAK_AM_START:-}
+      - PEAK_AM_END=${PEAK_AM_END:-}
+      - PEAK_PM_START=${PEAK_PM_START:-}
+      - PEAK_PM_END=${PEAK_PM_END:-}
+      - PEAK_WEEKENDS=${PEAK_WEEKENDS:-}
+      - OVERNIGHT_START=${OVERNIGHT_START:-}
+      - OVERNIGHT_END=${OVERNIGHT_END:-}
+      - OVERNIGHT_INTERVAL=${OVERNIGHT_INTERVAL:-}
+      - OFFPEAK_INTERVAL=${OFFPEAK_INTERVAL:-}
+      # Testing aids: force the fast poll interval at all hours, or pin a phase.
       - FORCE_FAST_POLL=${FORCE_FAST_POLL:-}
+      - FORCE_PHASE=${FORCE_PHASE:-}
       # Run mode the client should adopt and stick to. Defaults to sleep-suspend
       # so a dedicated dashboard survives OTA restarts (the client comes back up
       # as resident and the sticky desired-mode re-asserts sleep-suspend).
@@ -59,6 +65,8 @@ services:
       # 55 MB feed isn't re-downloaded and re-parsed on every deploy. Also holds
       # the auto-generated control token.
       - tracker-cache:/app/cache
+      # Schedule state machine config (schedule.json), read-only.
+      - ./config:/app/config:ro
     healthcheck:
       # $$ defers expansion to the container shell so a custom PORT is honoured.
       test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost:$${PORT:-8000}/healthz"]

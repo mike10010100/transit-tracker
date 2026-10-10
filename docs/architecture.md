@@ -82,16 +82,51 @@ The server runs on standard Linux/macOS hosts, home servers, or Raspberry Pis us
   - `auto`: Automatically selects the optimal view based on current local time.
 - **`ScaledDraw` Proxy**: Located in `server/canvas.py`, wraps Pillow's `ImageDraw` to scale coordinates, bounding boxes, and font sizes linearly according to the requested display scale.
 
-### 2.3 Schedule & Lighting Governor (`server/schedule.py`)
-- **Peak Commute Detection**:
-  - Morning Peak: 7:30 AM – 9:30 AM
-  - Evening Peak: 4:30 PM – 7:00 PM
-  - Weekends are off-peak by default unless `PEAK_WEEKENDS=1`.
-- **Dynamic Polling Advertisements**:
-  - Peak: 60-second polling interval (interactive presentation).
-  - Off-Peak: 600-second (10-minute) interval (idle presentation).
-  - Overnight: 3600-second (1-hour) deep-eco window (dormant presentation).
-- **Ambient Lighting**: Fixed schedule signals the Kindle to engage warm frontlight levels (brightness 8, warmth 12) during peak commutes, and 0/0 off-peak.
+### 2.3 Schedule State Machine (`server/state_machine.py`, `server/schedule.py`)
+
+The schedule is a configurable two-layer state machine. The server owns
+**layer 1**, the time-driven *phase*. The client will own **layer 2**, the
+event-driven *interaction overlay* (`idle → session → hold`). Its timeouts are
+configured here and shipped in the signed `X-Tracker-Policy` header.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    offpeak --> peak: window start
+    peak --> offpeak: window end
+    offpeak --> overnight: window start
+    overnight --> offpeak: window end
+```
+
+Each phase sets everything that used to be scattered across `schedule.py`:
+
+| Phase key | Meaning | `peak` | `offpeak` | `overnight` |
+|---|---|---|---|---|
+| `poll_interval` | `X-Kindle-Poll-Interval` (30–7200 s) | 60 | 600 | 3600 |
+| `presentation` | `interactive` / `idle` / `dormant` | interactive | idle | dormant |
+| `status_note` | Bottom-strip text for non-interactive faces; `{until}` is replaced with the phase end (e.g. `6:00 AM`) | – | "PRESS POWER…" | "SLEEPING — back at {until}…" |
+| `lighting` | Frontlight `brightness` / `warmth` (0–24) | 8 / 12 | 0 / 0 | 0 / 0 |
+| `realtime` | Allow GTFS-RT / live feeds (else static schedule only) | ✓ | ✓ | ✗ |
+| `suspend` | Client may deep-suspend between polls | ✗ | ✓ | ✓ |
+
+**Windows** select the active phase. They are evaluated **in order and the first match wins**. `days` defaults to every day. A window with `start > end` wraps past midnight and belongs to the day it *starts* on. Outside every window, `default_phase` applies. A window may also set `view` (`morning` / `evening`), which an `auto` view request then uses. Outside such windows, `auto` falls back to the 5:00–12:00 morning rule. The defaults are weekday peaks 07:30–09:30 (morning view) and 16:30–19:00 (evening view), plus overnight 22:00–06:00 every day.
+
+**Configuration** lives in `schedule.json` at `$SCHEDULE_CONFIG` (default `/app/config/schedule.json`). [`config/schedule.example.json`](../config/schedule.example.json) spells out the built-in defaults. The merge rules are:
+- `phases` merge by name and key. You can override a single value, such as `{"phases": {"peak": {"lighting": {"brightness": 4}}}}`, or add a new phase.
+- `windows` replaces the default windows entirely.
+- `interaction` merges by key.
+
+Precedence, from lowest to highest: built-in defaults, then `schedule.json`, then the legacy env vars (`PEAK_*`, `OVERNIGHT_*`, `OFFPEAK_INTERVAL`, `OVERNIGHT_INTERVAL`). Empty env vars count as unset. The window env vars are ignored, with a warning, when the file defines its own `windows`.
+
+**Fail-safe hot reload:** the file is re-read whenever its mtime changes. Validation is strict: unknown keys, wrong types, out-of-range values, bad `HH:MM` times and undefined phase references all reject the **whole file**. The error is logged and shown by `GET /schedule`, and the last good config stays in effect.
+
+**Testing aids:** `FORCE_PHASE=<name>` pins a phase. `FORCE_FAST_POLL=1` forces an interactive face with 60 s polling.
+
+**Interaction overlay parameters** (`interaction`): `session_timeout` (90 s; how long a power-button session stays awake without touches), `session_lighting` (8 / 12), `fast_poll_hold` (600 s) and `hold` (2700 s; how long manual view and frontlight choices persist). Clients that request response format v2 receive these, plus the current phase, its end (`until`, epoch seconds) and `suspend`, as:
+
+```
+X-Tracker-Policy: v=1;phase=peak;until=1760103000;suspend=0;session=90;fast=600;hold=2700;sl=8,12
+```
 
 ### 2.4 Multi-Device Fleet Registry (`server/device_registry.py`)
 - **Auto-Registration**: Any incoming request containing `X-Tracker-Client-ID` is automatically registered without prior manual provisioning.

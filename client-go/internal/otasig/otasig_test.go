@@ -253,7 +253,7 @@ func TestResponseMessage_NilHeadersAndCRLF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(string(msg), "\nx-tracker-view=") || strings.HasSuffix(string(msg), "\n") {
+	if !strings.HasSuffix(string(msg), "\nx-tracker-policy=") || strings.HasSuffix(string(msg), "\n") {
 		t.Errorf("unexpected message tail: %q", msg)
 	}
 	if _, err := ResponseMessage("n", "/a\nb", 200, "", nil); !errors.Is(err, ErrHeader) {

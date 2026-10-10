@@ -58,12 +58,12 @@ from ota import (
 from paths import resolve_cache_dir
 from render_dashboard import STOPS, WIDTH, get_mock_data, render_dashboard, resolve_view
 from schedule import (
-    FORCE_FAST_POLL,
-    OVERNIGHT_END,
-    OVERNIGHT_START,
     _parse_hour_env,
     get_commute_lighting,
+    get_policy_header,
     get_presentation,
+    get_schedule_report,
+    get_schedule_state,
     get_status_note,
     get_target_poll_interval,
     is_overnight_hours,
@@ -72,15 +72,13 @@ from schedule import (
 from version import VERSION
 
 __all__ = [
-    "FORCE_FAST_POLL",
-    "OVERNIGHT_END",
-    "OVERNIGHT_START",
     "PORT",
     "SERVER_VERSION",
     "_parse_hour_env",
     "format_for_kindle",
     "get_commute_lighting",
     "get_presentation",
+    "get_schedule_state",
     "get_status_note",
     "get_target_poll_interval",
     "is_overnight_hours",
@@ -258,7 +256,7 @@ def get_fresh_data(
                 route="126", stops=[str(stop["id"]) for stop in STOPS]
             )
 
-        allow_realtime = not is_overnight_hours()
+        allow_realtime = get_schedule_state().realtime
         for stop in STOPS:
             sid = str(stop["id"])
             arrivals = None
@@ -795,6 +793,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._write_body(payload)
             return
 
+        if parsed.path == "/schedule":
+            # Read-only, but gated like every other control endpoint (§9).
+            if not check_control_auth(self):
+                self._send_forbidden()
+                return
+            payload = json.dumps(get_schedule_report(), indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self._write_body(payload)
+            return
+
         if parsed.path == "/tracker-arm.manifest":
             info = get_valid_manifest()
             if info is None:
@@ -1022,12 +1034,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
             is_charging = str(charging_param).lower() in ["1", "true", "yes"]
             is_kindle = kindle_mode == "pw5" or "kindle" in params
             interactive_override = params.get("present", [""])[0] == "interactive"
+            sched = get_schedule_state()
             presentation = (
                 "interactive"
                 if (interactive_override or not is_kindle)
-                else get_presentation()
+                else sched.presentation
             )
-            status_note = get_status_note(presentation)
+            status_note = "" if presentation == "interactive" else sched.status_note
+            # An "auto" view follows the active window's view when it sets one,
+            # falling back to the time-of-day rule in resolve_view().
+            render_view = (
+                sched.view if (view_param == "auto" and sched.view) else view_param
+            )
             render_w = 800
             render_h = 480
 
@@ -1047,7 +1065,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     use_mock=use_mock,
                     batt_level=batt_level,
                     is_charging=is_charging,
-                    view=view_param,
+                    view=render_view,
                     width=render_w,
                     height=render_h,
                     scale=scale,
@@ -1066,7 +1084,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     use_mock=use_mock,
                     batt_level=batt_level,
                     is_charging=is_charging,
-                    view=view_param,
+                    view=render_view,
                     width=render_w,
                     height=render_h,
                     presentation=presentation,
@@ -1078,8 +1096,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             img_bytes = buf.getvalue()
 
             etag = f'"{hashlib.sha256(img_bytes).hexdigest()[:16]}"'
-            brightness, warmth = get_commute_lighting()
-            poll_interval = get_target_poll_interval()
+            brightness = sched.lighting.brightness
+            warmth = sched.lighting.warmth
+            poll_interval = sched.poll_interval
 
             client_mode = self.headers.get("X-Tracker-Mode", "")
             client_version = self.headers.get("X-Tracker-Client-Version", "")
@@ -1132,8 +1151,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ("X-Kindle-Poll-Interval", str(poll_interval)),
                 ("X-Tracker-Presentation", presentation),
                 ("X-Tracker-Server", f"http://{local_ip}:{PORT}"),
-                ("X-Resolved-View", resolve_view(view_param)),
+                ("X-Resolved-View", resolve_view(render_view)),
                 ("X-Tracker-View", view_param),
+                ("X-Tracker-Policy", get_policy_header(sched)),
             ]
 
             valid_m = get_valid_manifest()
@@ -1210,7 +1230,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             else:
                 batt_html = " | Kindle: <em>no report</em>"
 
-            poll_interval = get_target_poll_interval()
+            panel_state = get_schedule_state()
+            poll_interval = panel_state.poll_interval
+            phase_until = (
+                f" until {panel_state.until.strftime('%a %H:%M')}"
+                if panel_state.until is not None
+                else ""
+            )
+            phase_html = (
+                f" | Phase: <strong>{html.escape(panel_state.phase)}</strong>"
+                f"{html.escape(phase_until)}"
+            )
             registered_devices = registry.list_devices()
             total_count = len(registered_devices)
             online_count = sum(
@@ -1452,7 +1482,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 </head>
 <body>
     <img src="/dashboard.png?view={current_view}&amp;t={int(time.time())}" alt="Transit Dashboard" />
-    <div class="status">Status: {status_badge}{batt_html}</div>
+    <div class="status">Status: {status_badge}{batt_html}{phase_html}</div>
     <div class="controls">
         <input type="password" id="tokenInput" placeholder="Control Token" />
         <button id="saveTokenBtn">Save Token</button>
