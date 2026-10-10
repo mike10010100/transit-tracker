@@ -112,9 +112,21 @@ python server/server.py
 - **Web UI (Auto-reloading):** `http://localhost:8000`
 - **Kindle Image Endpoint:** `http://<SERVER_IP>:8000/dashboard.png?kindle=pw5`
 
+### Customising the Schedule
+
+The schedule is a configurable state machine. Named **phases** (`peak`, `offpeak`, `overnight`, or your own) set the poll interval, the e-ink face, the frontlight, realtime feeds and suspend behaviour. Ordered **windows** pick the phase by time of day and day of week.
+
+```bash
+cp config/schedule.example.json config/schedule.json
+$EDITOR config/schedule.json      # hot-reloaded; no restart needed
+curl -H "X-Tracker-Token: $TRACKER_CONTROL_TOKEN" http://<SERVER_IP>:8000/schedule
+```
+
+You only need to include the keys you change, e.g. `{"phases": {"peak": {"lighting": {"brightness": 4}}}}`. An invalid file is rejected as a whole and the previous config stays active; `GET /schedule` reports why. See [architecture §2.3](docs/architecture.md#23-schedule-state-machine-serverstate_machinepy-serverschedulepy) for the full reference.
+
 ### Control Endpoints
 
-State-mutating control plane operations (`POST /stop`, `POST /resume`, `POST /mode`, `POST /action`, `POST /diag/request`) and query endpoints (`GET /devices`, `GET /mode`, `GET /action`, `GET /diag`) require authentication via the `X-Tracker-Token` header:
+State-mutating control plane operations (`POST /stop`, `POST /resume`, `POST /mode`, `POST /action`, `POST /diag/request`) and query endpoints (`GET /devices`, `GET /schedule`, `GET /mode`, `GET /action`, `GET /diag`) require authentication via the `X-Tracker-Token` header:
 
 ```bash
 export TRACKER_CONTROL_TOKEN=my-secret

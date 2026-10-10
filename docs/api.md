@@ -38,6 +38,7 @@ Renders and delivers the transit dashboard PNG image tailored to the requesting 
 | `X-Kindle-Brightness` | Recommended frontlight brightness (`0` to `24`). |
 | `X-Kindle-Warmth` | Recommended frontlight color warmth (`0` to `24`). |
 | `X-Tracker-Presentation`| Presentation state: `interactive`, `idle`, or `dormant`. |
+| `X-Tracker-Policy` | Schedule and interaction policy as `;`-separated `key=value` pairs: `v` (policy version), `phase`, `until` (epoch seconds of the next phase change; omitted if none), `suspend` (`0`/`1`), `session`, `fast`, `hold` (seconds), `sl` (session lighting `brightness,warmth`). Clients must ignore unknown keys. See [architecture §2.3](architecture.md#23-schedule-state-machine-serverstate_machinepy-serverschedulepy). |
 | `X-Tracker-Mode` | Run mode directive targeted at the client. |
 | `X-Tracker-Action` | Queued action popped for this client (`restart`, `update`, etc.). |
 | `X-Tracker-Diag` | Diagnostics dump request popped for this client (`quick` or `full`). |
@@ -158,6 +159,29 @@ Lists all registered devices and real-time telemetry.
   ]
 }
 ```
+
+### 4.1a `GET /schedule`
+Read-only view of the schedule state machine, for debugging `schedule.json`. Like the other control endpoints, it requires `X-Tracker-Token`.
+
+#### Response (`200 OK`, `application/json`)
+```json
+{
+  "source": "/app/config/schedule.json",
+  "path": "/app/config/schedule.json",
+  "error": null,
+  "now": "2026-10-08T08:15:00",
+  "current": {
+    "phase": "peak", "presentation": "interactive", "status_note": "",
+    "poll_interval": 60, "lighting": {"brightness": 8, "warmth": 12},
+    "realtime": true, "suspend": false, "view": "morning",
+    "until": "2026-10-08T09:30:00"
+  },
+  "transitions": [{"at": "2026-10-08T09:30:00", "phase": "offpeak"}],
+  "config": { "...": "effective config in schedule.json shape" },
+  "overrides": {"force_phase": null, "force_fast_poll": false}
+}
+```
+`error` contains the most recent rejected-file message, while the last good config remains active. `transitions` covers the next 24 hours.
 
 ### 4.2 `POST /action`
 Queues a hardware or software action for a specific client or the entire fleet.

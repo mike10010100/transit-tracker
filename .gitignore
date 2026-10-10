@@ -24,3 +24,6 @@ cache/
 .hypothesis/
 .mutmut-cache
 mutants/
+
+# Local schedule state machine config (see config/schedule.example.json).
+config/schedule.json

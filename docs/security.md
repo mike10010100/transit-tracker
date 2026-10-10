@@ -93,6 +93,16 @@ The server certificate is minted during `make build` and signed by the root rele
    - That the signature on the response headers/body/nonce is valid for the server's public key.
    - If verification fails, the response is discarded and the display remains untouched.
 
+### 3.3 Signed Response Format
+The signed message (`transit-tracker-resp-v2`) covers a fixed, ordered list of 13 headers. A header that is absent is still signed, as an empty `name=` line.
+
+| Format (first line of the message) | Signed headers |
+|---|---|
+| `transit-tracker-resp-v2` | `etag`, `x-kindle-poll-interval`, `x-tracker-presentation`, `x-tracker-mode`, `x-tracker-action`, `x-tracker-diag`, `x-kindle-brightness`, `x-kindle-warmth`, `x-tracker-version`, `x-tracker-sha256`, `x-resolved-view`, `x-tracker-view`, `x-tracker-policy` |
+
+- `X-Tracker-Policy` is included directly in the response signature alongside all other presentation and control headers.
+- Shared test vectors are in `client-go/internal/otasig/testdata/vectors.json` (`response`).
+
 ---
 
 ## 4. Constant-Time Timing Attack Defenses

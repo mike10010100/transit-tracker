@@ -19,12 +19,15 @@ from http.server import ThreadingHTTPServer
 from unittest.mock import MagicMock, patch
 
 import ota
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
 from identity import (
     CERT_FORMAT,
+    RESP_FORMAT,
+    SIGNED_HEADERS,
     IdentityError,
     ServerIdentity,
     b64decode_strict,
@@ -65,6 +68,32 @@ class TestVectorsAndCrypto(unittest.TestCase):
             headers=vec_resp["headers"],
         )
         self.assertEqual(msg.decode("utf-8"), vec_resp["message"])
+        self.assertTrue(vec_resp["message"].startswith(RESP_FORMAT + "\n"))
+        self.assertTrue(
+            vec_resp["message"].endswith(
+                "\nx-tracker-policy=" + vec_resp["headers"]["x-tracker-policy"]
+            )
+        )
+        priv = Ed25519PrivateKey.from_private_bytes(
+            bytes.fromhex(self.vectors["server_seed_hex"])
+        )
+        self.assertEqual(
+            base64.b64encode(priv.sign(msg)).decode("ascii"), vec_resp["signature"]
+        )
+
+    def test_response_format_covers_policy(self):
+        self.assertEqual(RESP_FORMAT, "transit-tracker-resp-v2")
+        self.assertEqual(len(SIGNED_HEADERS), 13)
+        self.assertIn("x-tracker-policy", SIGNED_HEADERS)
+        vec = self.vectors["response"]
+        msg = build_response_message(
+            nonce=vec["nonce"],
+            path=vec["path"],
+            status=vec["status"],
+            body=vec["body"].encode("utf-8"),
+            headers=vec["headers"],
+        )
+        self.assertEqual(msg.decode("utf-8"), vec["message"])
 
     def test_response_signature_against_vectors(self):
         vec_resp = self.vectors["response"]
@@ -427,6 +456,78 @@ class TestAuthenticatedEndpoints(unittest.TestCase):
             self.assertIn("X-Tracker-Auth", headers)
         finally:
             server.tracker_stopped = False
+
+    def _verify(self, nonce, path, status, body, headers):
+        """Rebuilds the message from the received headers and verifies it."""
+        hdr_map = {k.lower(): v for k, v in headers.items()}
+        msg = build_response_message(
+            nonce=nonce,
+            path=path,
+            status=status,
+            body=body,
+            headers=hdr_map,
+        )
+        pub = Ed25519PublicKey.from_public_bytes(
+            b64decode_strict(self.test_identity.public_key_b64)
+        )
+        pub.verify(b64decode_strict(headers["X-Tracker-Auth"]), msg)
+
+    def test_dashboard_signs_policy_200_and_304(self):
+        nonce = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+        status, headers, body = _http_get(
+            self.port,
+            "/dashboard.png?mock=1&kindle=pw5",
+            headers={"X-Tracker-Nonce": nonce},
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("X-Tracker-Policy", headers)
+        self._verify(nonce, "/dashboard.png", 200, body, headers)
+        # Tampering with the policy breaks the signature.
+        tampered = dict(headers)
+        tampered["X-Tracker-Policy"] = headers["X-Tracker-Policy"].replace(
+            "session=", "session=9"
+        )
+        with self.assertRaises(InvalidSignature):
+            self._verify(nonce, "/dashboard.png", 200, body, tampered)
+
+        nonce304 = "f0e1d2c3b4a5968778695a4b3c2d1e0f"
+        status, headers304, body304 = _http_get(
+            self.port,
+            "/dashboard.png?mock=1&kindle=pw5",
+            headers={
+                "X-Tracker-Nonce": nonce304,
+                "If-None-Match": headers["ETag"],
+            },
+        )
+        self.assertEqual(status, 304)
+        self.assertIn("X-Tracker-Policy", headers304)
+        self._verify(nonce304, "/dashboard.png", 304, body304, headers304)
+
+    def test_205_and_identity_signed(self):
+        server.tracker_stopped = True
+        try:
+            nonce = "abcdefabcdefabcdefabcdefabcdefab"
+            status, headers, body = _http_get(
+                self.port,
+                "/dashboard.png?mock=1",
+                headers={"X-Tracker-Nonce": nonce},
+            )
+            self.assertEqual(status, 205)
+            self._verify(nonce, "/dashboard.png", 205, b"", {**headers})
+        finally:
+            server.tracker_stopped = False
+
+        nonce = "fedcbafedcbafedcbafedcbafedcbafe"
+        status, headers, body = _http_get(
+            self.port, "/identity", headers={"X-Tracker-Nonce": nonce}
+        )
+        self.assertEqual(status, 200)
+        sig_headers = {
+            "X-Tracker-Auth": headers["X-Tracker-Auth"],
+            "content-type": "application/json",
+            "content-length": str(len(body)),
+        }
+        self._verify(nonce, "/identity", 200, body, sig_headers)
 
     def test_rotate_validation_400(self):
         status, _, _ = _http_get(self.port, "/dashboard.png?mock=1&rotate=45")

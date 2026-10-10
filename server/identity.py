@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - exercised only when the dep is missing
 KEY_NAME = "server_identity.key"
 CERT_NAME = "server_identity.cert.json"
 CERT_FORMAT = "transit-tracker-server-v1"
-RESP_FORMAT = "transit-tracker-resp-v1"
+RESP_FORMAT = "transit-tracker-resp-v2"
 
 NONCE_HEADER = "X-Tracker-Nonce"
 CERT_HEADER = "X-Tracker-Cert"
@@ -65,6 +65,7 @@ SIGNED_HEADERS = (
     "x-tracker-sha256",
     "x-resolved-view",
     "x-tracker-view",
+    "x-tracker-policy",
 )
 
 

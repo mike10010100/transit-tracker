@@ -604,31 +604,27 @@ class TestServerCoverageAdditions(ServerHTTPTestBase):
             self.assertEqual(server._parse_hour_env("TEST_INVALID_HOUR", 8.5), 8.5)
 
     def test_is_overnight_hours_ordered(self):
-        orig_start = server.OVERNIGHT_START
-        orig_end = server.OVERNIGHT_END
-        try:
-            server.OVERNIGHT_START = 1.0
-            server.OVERNIGHT_END = 5.0
+        import schedule
+        from state_machine import ConfigStore
+
+        store = ConfigStore(
+            path="",
+            env={"OVERNIGHT_START": "1.0", "OVERNIGHT_END": "5.0"},
+            log=lambda *_: None,
+        )
+        with patch.object(schedule, "STORE", store):
             dt_in = datetime.datetime(2026, 10, 10, 3, 0)
             dt_out = datetime.datetime(2026, 10, 10, 6, 0)
             self.assertTrue(server.is_overnight_hours(dt_in))
             self.assertFalse(server.is_overnight_hours(dt_out))
-        finally:
-            server.OVERNIGHT_START = orig_start
-            server.OVERNIGHT_END = orig_end
 
     def test_get_presentation_force_fast_poll(self):
         import schedule
+        from state_machine import ConfigStore
 
-        orig_srv = getattr(server, "FORCE_FAST_POLL", False)
-        orig_sch = schedule.FORCE_FAST_POLL
-        try:
-            schedule.FORCE_FAST_POLL = True
-            server.FORCE_FAST_POLL = True
+        store = ConfigStore(path="", env={"FORCE_FAST_POLL": "1"}, log=lambda *_: None)
+        with patch.object(schedule, "STORE", store):
             self.assertEqual(server.get_presentation(), "interactive")
-        finally:
-            schedule.FORCE_FAST_POLL = orig_sch
-            server.FORCE_FAST_POLL = orig_srv
 
     def test_action_endpoint_without_do(self):
         status, _headers, body = _http_get(
