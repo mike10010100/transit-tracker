@@ -1144,5 +1144,115 @@ class TestMultiDeviceWebInterface(ServerHTTPTestBase):
         self.assertEqual(status_unauth3, 403)
 
 
+class TestFleetTelemetryAndBrowserIsolation(ServerHTTPTestBase):
+    def setUp(self):
+        super().setUp()
+        server.get_device_registry().clear()
+
+    def test_browser_preview_does_not_register_device(self):
+        # 1. Web browser loads HTML viewer
+        status, _, body = _http_get(self.port, "/")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(server.get_device_registry().list_devices()), 0)
+
+        # 2. Web browser loads embedded dashboard image
+        status_img, _, _ = _http_get(
+            self.port, "/dashboard.png?view=auto&t=1791665695&mock=1"
+        )
+        self.assertEqual(status_img, 200)
+        self.assertEqual(len(server.get_device_registry().list_devices()), 0)
+
+        # 3. Reloading HTML viewer still shows 0 devices
+        status2, _, body2 = _http_get(self.port, "/")
+        self.assertEqual(status2, 200)
+        body_text = body2.decode("utf-8")
+        self.assertIn("Total: <strong>0</strong>", body_text)
+        self.assertIn("No registered devices", body_text)
+
+    def test_kindle_request_auto_registers_with_telemetry_headers(self):
+        status, _, _ = _http_get(
+            self.port,
+            "/dashboard.png?mock=1&kindle=pw5&batt=95&charging=1",
+            headers={
+                "X-Tracker-Client-ID": "kindle-pw5-fleet-test",
+                "X-Tracker-Client-Version": "1.35.10",
+                "X-Tracker-Firmware": "Kindle 5.18.6",
+                "X-Tracker-Mode": "sleep-suspend",
+                "X-Kindle-Battery": "95",
+                "X-Kindle-Charging": "1",
+            },
+        )
+        self.assertEqual(status, 200)
+
+        reg = server.get_device_registry()
+        dev = reg.get_device("kindle-pw5-fleet-test")
+        self.assertIsNotNone(dev)
+        self.assertEqual(dev.client_version, "1.35.10")
+        self.assertEqual(dev.firmware_version, "Kindle 5.18.6")
+        self.assertEqual(dev.client_mode, "sleep-suspend")
+        self.assertEqual(dev.battery, 95.0)
+        self.assertTrue(dev.charging)
+
+        status_view, _, body_view = _http_get(self.port, "/")
+        self.assertEqual(status_view, 200)
+        body_text = body_view.decode("utf-8")
+        self.assertIn("kindle-pw5-fleet-test", body_text)
+        self.assertIn("1.35.10 / Kindle 5.18.6", body_text)
+        self.assertIn("sleep-suspend", body_text)
+        self.assertIn("⚡ 95%", body_text)
+
+    def test_parse_diag_versions_helper(self):
+        text1 = (
+            "=== DIAGNOSTICS v1.35.10 ===\n"
+            "runtime: linux/arm\n"
+            "/etc/prettyversion.txt:\n"
+            "  Kindle 5.18.6 (~~otaVersion~~)\n"
+        )
+        c_ver, fw_ver = server.parse_diag_versions(text1)
+        self.assertEqual(c_ver, "1.35.10")
+        self.assertEqual(fw_ver, "Kindle 5.18.6")
+
+        # Fallback to /etc/version
+        text2 = (
+            "=== DIAGNOSTICS v1.2.3 ===\n"
+            "/etc/prettyversion.txt:\n"
+            "  <missing>\n"
+            "/etc/version:\n"
+            "  5.14.2\n"
+        )
+        c_ver2, fw_ver2 = server.parse_diag_versions(text2)
+        self.assertEqual(c_ver2, "1.2.3")
+        self.assertEqual(fw_ver2, "5.14.2")
+
+        # Empty / missing
+        c_empty, fw_empty = server.parse_diag_versions("no version info here")
+        self.assertEqual(c_empty, "")
+        self.assertEqual(fw_empty, "")
+
+    def test_post_diag_populates_parsed_versions(self):
+        diag_body = (
+            "=== DIAGNOSTICS v1.35.10 ===\n"
+            "battery_level=87 charging=false\n"
+            "/etc/prettyversion.txt:\n"
+            "  Kindle 5.18.6 (ota-123)\n"
+        )
+        status, _, _ = _http(
+            "POST",
+            self.port,
+            "/diag",
+            headers={"X-Tracker-Client-ID": "diag-ver-test"},
+            body=diag_body.encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+
+        reg = server.get_device_registry()
+        dev = reg.get_device("diag-ver-test")
+        self.assertIsNotNone(dev)
+        self.assertEqual(dev.client_version, "1.35.10")
+        self.assertEqual(dev.firmware_version, "Kindle 5.18.6")
+        self.assertEqual(dev.battery, 87.0)
+        self.assertFalse(dev.charging)
+
+
 if __name__ == "__main__":
     unittest.main()

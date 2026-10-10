@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.35.10] - 2026-10-10
+
+### Added
+
+- **Client Version & Firmware Telemetry**: Go client now attaches `X-Tracker-Client-Version: <Version>` and `X-Tracker-Firmware: <ReadFirmwareVersion>` headers across all polls, logs, diagnostics, and OTA requests.
+- **Diagnostics Version Ingestion Fallback**: Server now extracts client and Kindle OS firmware versions from diagnostic uploads (`/diag`) even when request headers are omitted.
+
+### Fixed
+
+- **Fleet Overview Device Isolation**: Excluded web browser image previews (`/dashboard.png` with no Kindle headers or client parameters) from auto-registering in the device registry as `default`, preventing browser traffic from polluting the fleet overview.
+- **Kindle OS Firmware Detection**: Added cached firmware version extraction in `client-go` parsing `/etc/prettyversion.txt` and `/etc/version`, stripping build metadata hashes like `(~~otaVersion~~)`.
+
 ## [1.35.9] - 2026-10-10
 
 ### Added

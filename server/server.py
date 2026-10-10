@@ -177,6 +177,30 @@ def parse_diag_battery(text: str) -> BatteryDiag:
     return BatteryDiag(level, m.group(2) == "true")
 
 
+def parse_diag_versions(text: str) -> tuple[str, str]:
+    """
+    Extracts (client_version, firmware_version) from diagnostics text report.
+    Returns ("", "") if not detected.
+    """
+    client_ver = ""
+    fw_ver = ""
+    m_ver = re.search(r"^=== DIAGNOSTICS v([^\s=]+) ===", text, re.MULTILINE)
+    if m_ver:
+        client_ver = m_ver.group(1).strip()
+    m_fw = re.search(r"/etc/prettyversion\.txt:\s*\n\s*([^\n(]+)", text)
+    if m_fw and "<missing>" not in m_fw.group(1) and "<directory>" not in m_fw.group(1):
+        fw_ver = m_fw.group(1).strip()
+    if not fw_ver:
+        m_fw2 = re.search(r"/etc/version:\s*\n\s*([^\n]+)", text)
+        if (
+            m_fw2
+            and "<missing>" not in m_fw2.group(1)
+            and "<directory>" not in m_fw2.group(1)
+        ):
+            fw_ver = m_fw2.group(1).strip()
+    return client_ver, fw_ver
+
+
 # Upstream data cache (bus arrivals + Citi Bike status), decoupled from render.
 _data_lock = threading.Lock()
 _data_fetch_lock = threading.Lock()
@@ -433,6 +457,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
             cid = params.get("client_id", params.get("id", [""]))[0].strip()
         return sanitize_client_id(cid)
 
+    def _is_client_device(self, params: Optional[dict[str, list[str]]] = None) -> bool:
+        """
+        Determines if an incoming request originated from an active transit-tracker
+        client device (e.g. Kindle Paperwhite ARM client or embedded polling script)
+        rather than a standard web browser previewing /dashboard.png.
+        """
+        if bool(self.headers.get("X-Tracker-Client-ID")):
+            return True
+        if bool(self.headers.get("X-Tracker-Mode")):
+            return True
+        if bool(self.headers.get("X-Tracker-Client-Version")):
+            return True
+        if bool(self.headers.get("X-Tracker-Firmware")):
+            return True
+        if bool(self.headers.get("X-Kindle-Battery")):
+            return True
+        if params:
+            if "client_id" in params or "id" in params:
+                return True
+            if "kindle" in params or "batt" in params or "battery" in params:
+                return True
+        return False
+
     def _remote_ip(self) -> str:
         if hasattr(self, "client_address") and self.client_address:
             return str(self.client_address[0])
@@ -638,15 +685,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             text = body.decode("utf-8", errors="replace")
             batt_lvl, charging = parse_diag_battery(text)
+            diag_client_ver, diag_fw_ver = parse_diag_versions(text)
             registry.save_diagnostics(client_id, text, resolve_cache_dir())
+            client_mode = self.headers.get("X-Tracker-Mode", "").strip()
+            client_version = (
+                self.headers.get("X-Tracker-Client-Version", "").strip()
+                or diag_client_ver
+            )
+            firmware_version = (
+                self.headers.get("X-Tracker-Firmware", "").strip() or diag_fw_ver
+            )
             registry.update_telemetry(
                 client_id=client_id,
                 remote_ip=remote_ip,
                 battery=float(batt_lvl) if batt_lvl is not None else None,
                 charging=charging,
-                client_mode=self.headers.get("X-Tracker-Mode", ""),
-                client_version=self.headers.get("X-Tracker-Client-Version", ""),
-                firmware_version=self.headers.get("X-Tracker-Firmware", ""),
+                client_mode=client_mode,
+                client_version=client_version,
+                firmware_version=firmware_version,
             )
             with _diag_lock:
                 _last_diagnostics["text"] = text
@@ -675,7 +731,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         client_id = self._extract_client_id(params)
         remote_ip = self._remote_ip()
         registry = get_device_registry()
-        if client_id != "default" or parsed.path in ["/dashboard.png", "/bus.png"]:
+        if client_id != "default" or (
+            parsed.path in ["/dashboard.png", "/bus.png"]
+            and self._is_client_device(params)
+        ):
             registry.get_or_register(client_id, remote_ip)
 
         if parsed.path in ["/healthz", "/health"]:
@@ -1026,15 +1085,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
             client_version = self.headers.get("X-Tracker-Client-Version", "")
             firmware_version = self.headers.get("X-Tracker-Firmware", "")
 
-            registry.update_telemetry(
-                client_id=client_id,
-                remote_ip=remote_ip,
-                battery=float(batt_level) if batt_level is not None else None,
-                charging=is_charging if charging_param is not None else None,
-                client_mode=client_mode,
-                client_version=client_version,
-                firmware_version=firmware_version,
-            )
+            if client_id != "default" or self._is_client_device(params):
+                registry.update_telemetry(
+                    client_id=client_id,
+                    remote_ip=remote_ip,
+                    battery=float(batt_level) if batt_level is not None else None,
+                    charging=is_charging if charging_param is not None else None,
+                    client_mode=client_mode,
+                    client_version=client_version,
+                    firmware_version=firmware_version,
+                )
 
             diag_header = ""
             mode_header = ""

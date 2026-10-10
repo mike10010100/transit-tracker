@@ -63,6 +63,11 @@ func (tc *TrackerClient) postText(ctx context.Context, path, msg string) {
 	}
 	req.Header.Set("Content-Type", "text/plain")
 	req.Header.Set("X-Tracker-Client-ID", tc.getClientID())
+	req.Header.Set("X-Tracker-Client-Version", Version)
+	if fw := GetFirmwareVersion(); fw != "" {
+		req.Header.Set("X-Tracker-Firmware", fw)
+	}
+	req.Header.Set("X-Tracker-Mode", currentModeName())
 	resp, err := tc.client.Do(req)
 	if err == nil {
 		resp.Body.Close()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -171,5 +172,106 @@ func TestPrepareDisplayForSleep(t *testing.T) {
 	}
 	if calls[2] != "lipc-set-prop com.lab126.blanket unload splash" {
 		t.Errorf("call 2 = %q", calls[2])
+	}
+}
+
+func TestReadFirmwareVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		files    map[string]string
+		readFile func(string) ([]byte, error)
+		want     string
+	}{
+		{
+			name: "prettyversion_with_ota_hash",
+			files: map[string]string{
+				"/etc/prettyversion.txt": "Kindle 5.18.6 (~~otaVersion~~)\n",
+			},
+			want: "Kindle 5.18.6",
+		},
+		{
+			name: "prettyversion_plain",
+			files: map[string]string{
+				"/etc/prettyversion.txt": "Kindle 5.14.2\n",
+			},
+			want: "Kindle 5.14.2",
+		},
+		{
+			name: "fallback_to_etc_version",
+			files: map[string]string{
+				"/etc/version": "5.16.2.1\n",
+			},
+			want: "5.16.2.1",
+		},
+		{
+			name: "empty_lines_and_whitespace",
+			files: map[string]string{
+				"/etc/prettyversion.txt": "\n\n   Kindle 5.17.0 (build-1234)   \n",
+			},
+			want: "Kindle 5.17.0",
+		},
+		{
+			name: "truncates_overly_long_string",
+			files: map[string]string{
+				"/etc/version": strings.Repeat("A", 50),
+			},
+			want: strings.Repeat("A", 32),
+		},
+		{
+			name:  "missing_files",
+			files: map[string]string{},
+			want:  "",
+		},
+		{
+			name:     "nil_read_file",
+			readFile: nil,
+			want:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rf := tt.readFile
+			if rf == nil && tt.files != nil {
+				rf = func(path string) ([]byte, error) {
+					if content, ok := tt.files[path]; ok {
+						return []byte(content), nil
+					}
+					return nil, os.ErrNotExist
+				}
+			}
+			got := ReadFirmwareVersion(rf)
+			if got != tt.want {
+				t.Errorf("ReadFirmwareVersion() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetFirmwareVersion_Caching(t *testing.T) {
+	patchRuntime(t)
+	resetFirmwareCache()
+	defer resetFirmwareCache()
+
+	readCount := 0
+	osReadFile = func(path string) ([]byte, error) {
+		readCount++
+		if path == "/etc/prettyversion.txt" {
+			return []byte("Kindle 5.18.6 (~~otaVersion~~)\n"), nil
+		}
+		return nil, os.ErrNotExist
+	}
+
+	v1 := GetFirmwareVersion()
+	v2 := GetFirmwareVersion()
+
+	if v1 != "Kindle 5.18.6" {
+		t.Errorf("v1 = %q, want 'Kindle 5.18.6'", v1)
+	}
+	if v2 != "Kindle 5.18.6" {
+		t.Errorf("v2 = %q, want 'Kindle 5.18.6'", v2)
+	}
+	if readCount != 1 {
+		t.Errorf("expected exactly 1 file read due to caching, got %d", readCount)
 	}
 }

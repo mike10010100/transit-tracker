@@ -18,6 +18,9 @@ func TestClientLog_PostLogAndDiagnosticsHeader(t *testing.T) {
 	type receivedReq struct {
 		path        string
 		clientID    string
+		clientVer   string
+		firmware    string
+		mode        string
 		contentType string
 		body        string
 	}
@@ -30,6 +33,9 @@ func TestClientLog_PostLogAndDiagnosticsHeader(t *testing.T) {
 		received = append(received, receivedReq{
 			path:        r.URL.Path,
 			clientID:    r.Header.Get("X-Tracker-Client-ID"),
+			clientVer:   r.Header.Get("X-Tracker-Client-Version"),
+			firmware:    r.Header.Get("X-Tracker-Firmware"),
+			mode:        r.Header.Get("X-Tracker-Mode"),
 			contentType: r.Header.Get("Content-Type"),
 			body:        string(bodyBytes),
 		})
@@ -62,6 +68,12 @@ func TestClientLog_PostLogAndDiagnosticsHeader(t *testing.T) {
 	}
 	if r0.clientID != "device-test-log-client-id" {
 		t.Errorf("clientID = %q, want device-test-log-client-id", r0.clientID)
+	}
+	if r0.clientVer != Version {
+		t.Errorf("clientVer = %q, want %q", r0.clientVer, Version)
+	}
+	if r0.mode == "" {
+		t.Errorf("expected non-empty X-Tracker-Mode header")
 	}
 	if r0.contentType != "text/plain" {
 		t.Errorf("contentType = %q, want text/plain", r0.contentType)

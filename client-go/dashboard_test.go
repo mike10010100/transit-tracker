@@ -163,8 +163,10 @@ func TestFetchAndDrawDashboard_Success(t *testing.T) {
 	png := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
 
 	var receivedClientID string
+	var receivedClientVer string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedClientID = r.Header.Get("X-Tracker-Client-ID")
+		receivedClientVer = r.Header.Get("X-Tracker-Client-Version")
 		w.Header().Set("X-Kindle-Poll-Interval", "45")
 		w.Header().Set("X-Tracker-View", r.Header.Get("X-Tracker-View"))
 		w.Header().Set("X-Resolved-View", "morning")
@@ -188,6 +190,9 @@ func TestFetchAndDrawDashboard_Success(t *testing.T) {
 	}
 	if receivedClientID != "test-client-id-1234" {
 		t.Errorf("expected X-Tracker-Client-ID %q, got %q", "test-client-id-1234", receivedClientID)
+	}
+	if receivedClientVer != Version {
+		t.Errorf("expected X-Tracker-Client-Version %q, got %q", Version, receivedClientVer)
 	}
 }
 
