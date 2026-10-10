@@ -129,7 +129,7 @@ def render_morning_view(
         )
         draw.line([(cx0, cb_y0 + pill_h), (cx1, cb_y0 + pill_h)], fill="black", width=2)
 
-        walk_text = f"{c['walk_min']} MIN"
+        walk_text = f"{c.get('walk_min', 0)} MIN"
         wb = draw.textbbox((0, 0), walk_text, font=font_walk)
         ww = wb[2] - wb[0]
         badge_x0 = cx1 - ww - 16
@@ -193,13 +193,13 @@ def render_morning_view(
 
             draw.text(
                 (cx0 + 12, div_y + (16 if is_tall else 12)),
-                f"{c['classic']} Classic Bikes",
+                f"{c.get('classic', 0)} Classic Bikes",
                 fill="#333333",
                 font=font_sub_stat,
             )
             draw.text(
                 (cx0 + 12, div_y + (40 if is_tall else 32)),
-                f"{c['docks']} Open Docks",
+                f"{c.get('docks', 0)} Open Docks",
                 fill="#333333",
                 font=font_sub_stat,
             )

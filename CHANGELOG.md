@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.35.9] - 2026-10-10
+
+### Added
+
+- **Go Client Native Fuzzing (`testing.F`)**: Implemented zero-dependency native Go fuzz test suites covering Linux evdev input event decoding (`FuzzParseInputEvents`) and cryptographic OTA signature/manifest/cert/semver validation (`FuzzVerifyManifest`, `FuzzVerifyCert`, `FuzzParseSemver`, `FuzzVerifyResponse`). Added `make fuzz` target and CI smoke test stage.
+- **Python Property-Based Testing (`hypothesis`)**: Added randomized property-based test harness (`tests/test_properties.py`) validating dashboard rendering layout invariants, schedule/commute lighting bounds, and nonce/header deterministic protocol envelopes.
+- **Targeted Mutation Testing (`mutmut`)**: Integrated scoped mutation testing for the server security and identity layer (`server/identity.py`), achieving high test kill rates with zero mutant survival in nonce validation. Added `make mutate-py` target and CI quality gate.
+
+### Fixed
+
+- **Defensive Evdev Buffer Bounds**: Clamped length bounds in `client-go/events.go` to prevent out-of-bounds slice indexing on malformed or truncated input buffers.
+- **Resilient View Field Extraction**: Handled missing `walk_min`, `classic`, `ebikes`, and `docks` station keys gracefully in `server/morning_view.py` and `server/evening_view.py`.
+- **CRLF Injection Prevention**: Enforced strict CR and LF rejection in `build_response_message` in `server/identity.py` to match Go client verification and spec §3 requirements.
+
 ## [1.35.8] - 2026-10-10
 
 ### Changed

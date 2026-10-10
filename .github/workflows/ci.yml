@@ -75,6 +75,9 @@ jobs:
       - name: Enforce Go Coverage Gate (93%)
         run: bash ../scripts/check_coverage_go.sh 93
 
+      - name: Go Fuzzing Smoke Tests
+        run: make -C .. fuzz
+
       # Exercise the full signed-release path with a throwaway key: embed the
       # public key, sign the manifest, mint a server cert, and verify.
       - name: Cross-Compile + Sign ARMv7 Binary (ephemeral key)
@@ -107,6 +110,8 @@ jobs:
   python-server:
     name: Python Server (lint, typecheck, tests)
     runs-on: ubuntu-latest
+    env:
+      HYPOTHESIS_PROFILE: ci
 
     steps:
       - name: Checkout Code
@@ -139,6 +144,9 @@ jobs:
 
       - name: Enforce Python Coverage Gate (92%)
         run: make coverage-py
+
+      - name: Targeted Python Mutation Testing Smoke (mutmut)
+        run: make mutate-py
 
   docker:
     name: Docker image (hadolint, signed build, ephemeral key)

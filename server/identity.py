@@ -13,6 +13,9 @@ disabled (loudly) and the server keeps serving unsigned responses, which signed
 clients will refuse.
 """
 
+if __name__ == "identity":
+    __name__ = "server.identity"
+
 import base64
 import binascii
 import hashlib
@@ -96,8 +99,12 @@ def build_response_message(
     `<name>=<value>` line per signed header (empty when the header is absent),
     joined by LF with no trailing newline.
     """
+    if any("\r" in s or "\n" in s for s in (nonce, path)):
+        raise IdentityError("CR or LF in nonce or path")
     lower: dict[str, str] = {}
     for name, value in headers.items():
+        if any("\r" in s or "\n" in s for s in (name, value)):
+            raise IdentityError(f"CR or LF in header {name}")
         lower[name.lower()] = value
     lines = [
         RESP_FORMAT,
