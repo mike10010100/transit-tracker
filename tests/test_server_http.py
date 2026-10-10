@@ -815,7 +815,7 @@ class TestMultiDeviceWebInterface(ServerHTTPTestBase):
             client_version="v1.2",
             firmware_version="5.14.2",
         )
-        # Device 2: offline (seen 1 hour ago), 15% battery, not charging, v1.0 / 5.12, sleep mode with target oneshot
+        # Device 2: offline (seen 1 day ago), 15% battery, not charging, v1.0 / 5.12, sleep mode with target oneshot
         d2 = registry.update_telemetry(
             client_id="kindle-dev-002",
             remote_ip="192.168.1.102",
@@ -825,7 +825,7 @@ class TestMultiDeviceWebInterface(ServerHTTPTestBase):
             client_version="v1.0",
             firmware_version="5.12.1",
         )
-        d2.last_seen = time.time() - 3600.0
+        d2.last_seen = time.time() - 86400.0
         registry.set_mode("kindle-dev-002", "oneshot")
 
         status, headers, body = _http_get(self.port, "/")

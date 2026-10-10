@@ -422,6 +422,8 @@ class TestIndexCachingAndLifecycle(unittest.TestCase):
             self.assertIsNotNone(res)
             self.assertEqual(res["route"], "126")
             self.assertIn("A", res["trips"])
+            if t2._build_thread is not None:
+                t2._build_thread.join(timeout=5.0)
 
             t3 = GTFSBusTracker(
                 route="126",
