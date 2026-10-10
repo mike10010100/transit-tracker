@@ -63,6 +63,11 @@ jobs:
           go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
           $(go env GOPATH)/bin/golangci-lint run ./...
 
+      - name: Vulnerability Audit (govulncheck)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          $(go env GOPATH)/bin/govulncheck ./...
+
       - name: Run Unit Tests with Race Detector
         run: go test -v -race ./...
 

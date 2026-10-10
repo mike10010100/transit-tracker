@@ -141,27 +141,29 @@ Lists all registered devices and real-time telemetry.
 
 #### Response (`200 OK`, `application/json`)
 ```json
-[
-  {
-    "client_id": "G001LG0123456789",
-    "remote_ip": "192.168.1.142",
-    "battery": 87,
-    "charging": true,
-    "last_seen": 1791653580.4,
-    "client_version": "1.35.5",
-    "firmware_version": "5.16.2.1",
-    "client_mode": "sleep",
-    "target_mode": "",
-    "online": true
-  }
-]
+{
+  "devices": [
+    {
+      "client_id": "G001LG0123456789",
+      "remote_ip": "192.168.1.142",
+      "battery": 87,
+      "charging": true,
+      "last_seen": 1791653580.4,
+      "client_version": "1.35.5",
+      "firmware_version": "5.16.2.1",
+      "client_mode": "sleep",
+      "target_mode": "",
+      "online": true
+    }
+  ]
+}
 ```
 
 ### 4.2 `POST /action`
 Queues a hardware or software action for a specific client or the entire fleet.
 
-#### Parameters (Form or Query)
-- `action`: `restart`, `reboot`, `update`, `clear_backup`, `disable-ads`.
+#### Parameters (JSON body, Form, or Query)
+- `action`: `restart`, `reboot`, `update`, `clear_backup`, `disable-ads`, `stop-framework`, `start-framework`, `framework-state`, `sleep-test`, `rtc-suspend`, `input-wake-probe`, `touch-wake-test`, `touch-wake-probe`.
 - `client_id` (optional): Specific client ID, or `all` to broadcast.
 
 ### 4.3 `POST /mode`

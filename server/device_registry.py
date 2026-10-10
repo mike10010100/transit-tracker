@@ -100,12 +100,45 @@ class DeviceRecord:
         }
 
 
+MAX_REGISTERED_DEVICES = int(os.environ.get("TRACKER_MAX_DEVICES", "64"))
+MAX_LOG_FILE_SIZE = 512 * 1024  # 512 KB
+MAX_DIAG_FILE_SIZE = 512 * 1024  # 512 KB
+
+
 class DeviceRegistry:
     """Thread-safe per-device registry and queue manager."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_devices: int = MAX_REGISTERED_DEVICES) -> None:
         self._lock = threading.RLock()
         self._devices: dict[str, DeviceRecord] = {}
+        self.max_devices = max(1, max_devices)
+
+    def _evict_one_locked(self) -> None:
+        """Evicts the oldest offline device or oldest seen non-default device to bound memory."""
+        offline_devs = [
+            d
+            for d in self._devices.values()
+            if d.client_id != "default" and not d.is_online()
+        ]
+        if offline_devs:
+            evict = min(offline_devs, key=lambda d: d.last_seen)
+            del self._devices[evict.client_id]
+            logger.info(
+                "Evicted offline device %s from registry (limit %d reached)",
+                evict.client_id,
+                self.max_devices,
+            )
+            return
+
+        non_defaults = [d for d in self._devices.values() if d.client_id != "default"]
+        if non_defaults:
+            evict = min(non_defaults, key=lambda d: d.last_seen)
+            del self._devices[evict.client_id]
+            logger.info(
+                "Evicted oldest device %s from registry (limit %d reached)",
+                evict.client_id,
+                self.max_devices,
+            )
 
     def get_or_register(self, client_id: str, remote_ip: str = "") -> DeviceRecord:
         """
@@ -115,6 +148,8 @@ class DeviceRegistry:
         safe_id = sanitize_client_id(client_id)
         with self._lock:
             if safe_id not in self._devices:
+                if len(self._devices) >= self.max_devices:
+                    self._evict_one_locked()
                 self._devices[safe_id] = DeviceRecord(
                     client_id=safe_id,
                     remote_ip=remote_ip,
@@ -255,10 +290,13 @@ class DeviceRegistry:
         os.path.join(cache_dir, "devices", safe_id, "diagnostics.txt")
         """
         safe_id = sanitize_client_id(client_id)
+        bounded_text = (
+            text[:MAX_DIAG_FILE_SIZE] if len(text) > MAX_DIAG_FILE_SIZE else text
+        )
         now = time.time()
         with self._lock:
             record = self.get_or_register(safe_id)
-            record.last_diagnostics_text = text
+            record.last_diagnostics_text = bounded_text
             record.last_diagnostics_time = now
 
             try:
@@ -266,7 +304,7 @@ class DeviceRegistry:
                 os.makedirs(dev_dir, exist_ok=True)
                 diag_path = os.path.join(dev_dir, "diagnostics.txt")
                 with open(diag_path, "w", encoding="utf-8") as f:
-                    f.write(text)
+                    f.write(bounded_text)
             except OSError as e:
                 logger.warning("Failed to save diagnostics file for %s: %s", safe_id, e)
 
@@ -276,12 +314,13 @@ class DeviceRegistry:
         os.path.join(cache_dir, "devices", safe_id, "client.log")
         """
         safe_id = sanitize_client_id(client_id)
+        bounded_text = text[:65536] if len(text) > 65536 else text
         with self._lock:
             record = self.get_or_register(safe_id)
             record.last_seen = time.time()
-            lines = text.splitlines()
-            if not lines and text:
-                lines = [text]
+            lines = bounded_text.splitlines()
+            if not lines and bounded_text:
+                lines = [bounded_text]
             for line in lines:
                 record.recent_logs.append(line)
 
@@ -289,11 +328,27 @@ class DeviceRegistry:
                 dev_dir = os.path.join(cache_dir, "devices", safe_id)
                 os.makedirs(dev_dir, exist_ok=True)
                 log_path = os.path.join(dev_dir, "client.log")
+                if (
+                    os.path.isfile(log_path)
+                    and os.path.getsize(log_path) > MAX_LOG_FILE_SIZE
+                ):
+                    try:
+                        keep_bytes = MAX_LOG_FILE_SIZE // 2
+                        with open(log_path, "rb") as f:
+                            f.seek(-keep_bytes, os.SEEK_END)
+                            tail = f.read()
+                        nl = tail.find(b"\n")
+                        if nl != -1:
+                            tail = tail[nl + 1 :]
+                        with open(log_path, "wb") as f:
+                            f.write(tail)
+                    except OSError:
+                        pass
                 with open(log_path, "a", encoding="utf-8") as f:
-                    if text.endswith("\n"):
-                        f.write(text)
+                    if bounded_text.endswith("\n"):
+                        f.write(bounded_text)
                     else:
-                        f.write(text + "\n")
+                        f.write(bounded_text + "\n")
             except OSError as e:
                 logger.warning("Failed to append log file for %s: %s", safe_id, e)
 

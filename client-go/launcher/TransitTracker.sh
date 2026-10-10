@@ -5,7 +5,7 @@
 
 set -eu
 
-LOG_FILE="/tmp/tracker_bootstrap.log"
+LOG_FILE="${LOG_FILE:-/tmp/tracker_bootstrap.log}"
 exec 2>>"$LOG_FILE" || true
 
 SERVER="${SERVER:-}"
@@ -14,6 +14,7 @@ FALLBACK_CONFIG="${FALLBACK_CONFIG:-/tmp/tracker_server.txt}"
 BINARY="${BINARY:-/tmp/tracker-arm}"
 BACKUP="${BACKUP:-/mnt/us/documents/tracker_backup}"
 DL_TMP="${BINARY}.dl.$$"
+MANIFEST_TMP="${BINARY}.manifest.$$"
 PORT="${SERVER_PORT:-${PORT:-8000}}"
 PROC_ROUTE="${PROC_NET_ROUTE:-/proc/net/route}"
 PROC_ARP="${PROC_NET_ARP:-/proc/net/arp}"
@@ -21,7 +22,7 @@ MDNS_HOST="${MDNS_HOST:-transittracker.local}"
 
 # shellcheck disable=SC2317,SC2329
 cleanup() {
-    rm -f "$DL_TMP" /tmp/.sweep_found_$$* 2>/dev/null || true
+    rm -f "$DL_TMP" "$MANIFEST_TMP" /tmp/.sweep_found_$$* 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -34,6 +35,24 @@ is_elf() {
     [ "$size" -ge 1000 ] 2>/dev/null || return 1
     magic="$(head -c 4 "$target_file" 2>/dev/null || dd if="$target_file" bs=4 count=1 2>/dev/null || true)"
     [ "$magic" = "$(printf '\177ELF')" ]
+}
+
+verify_checksum() {
+    target_file="$1"
+    expected_sha="$2"
+    [ -f "$target_file" ] || return 1
+    [ -n "$expected_sha" ] || return 1
+
+    actual_sha=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual_sha="$(sha256sum "$target_file" 2>/dev/null | awk '{print $1}')"
+    elif command -v openssl >/dev/null 2>&1; then
+        actual_sha="$(openssl dgst -sha256 "$target_file" 2>/dev/null | awk '{print $NF}')"
+    fi
+    actual_sha="$(echo "$actual_sha" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    expected_sha="$(echo "$expected_sha" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+
+    [ -n "$actual_sha" ] && [ "$actual_sha" = "$expected_sha" ]
 }
 
 verify_server() {
@@ -329,8 +348,25 @@ if [ -n "$SERVER" ]; then
     # First-install bootstrap / download if missing or invalid
     if [ ! -x "$BINARY" ] || ! is_elf "$BINARY"; then
         echo "Downloading tracker-arm from $SERVER..." >&2
+        manifest_fetched=0
+        exp_sha=""
+        if curl -fs -m 10 "$SERVER/tracker-arm.manifest" -o "$MANIFEST_TMP" 2>/dev/null; then
+            exp_sha="$(tr -d '\n\r' < "$MANIFEST_TMP" 2>/dev/null | sed -n 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([a-fA-F0-9]\{64\}\)".*/\1/p' | head -n 1 || true)"
+            manifest_fetched=1
+        fi
+        rm -f "$MANIFEST_TMP" 2>/dev/null || true
+
         if curl -fs -m 30 --max-filesize 33554432 "$SERVER/tracker-arm" -o "$DL_TMP" 2>/dev/null; then
-            if is_elf "$DL_TMP"; then
+            if ! is_elf "$DL_TMP"; then
+                echo "Downloaded binary failed ELF check" >&2
+                rm -f "$DL_TMP"
+            elif [ "$manifest_fetched" -eq 1 ] && [ -n "$exp_sha" ] && ! verify_checksum "$DL_TMP" "$exp_sha"; then
+                echo "Downloaded binary failed SHA-256 checksum verification" >&2
+                rm -f "$DL_TMP"
+            elif [ "$manifest_fetched" -eq 0 ] || [ -z "$exp_sha" ]; then
+                echo "Downloaded binary rejected: missing release manifest or sha256" >&2
+                rm -f "$DL_TMP"
+            else
                 chmod +x "$DL_TMP"
                 mv -f "$DL_TMP" "$BINARY"
                 backup_dir="$(dirname "$BACKUP")"
@@ -340,9 +376,6 @@ if [ -n "$SERVER" ]; then
                 if [ -n "$DISCOVERED_SERVER" ]; then
                     persist_server_url "$SERVER"
                 fi
-            else
-                echo "Downloaded binary failed ELF check" >&2
-                rm -f "$DL_TMP"
             fi
         fi
     fi

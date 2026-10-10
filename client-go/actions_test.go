@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestShell_EdgeCases(t *testing.T) {
@@ -241,5 +242,66 @@ func TestActionTouchWakeTest_Verdicts(t *testing.T) {
 	res = actionTouchWakeTest(context.Background())
 	if !strings.Contains(res, "NON-RTC WAKE") {
 		t.Fatalf("expected NON-RTC WAKE verdict, got:\n%s", res)
+	}
+}
+
+func TestActionRestartRebootUpdateClearBackup(t *testing.T) {
+	origExit := osExit
+	origCmd := execCommandContext
+	origDelay := exitDelay
+	exitDelay = 0
+	defer func() {
+		exitDelay = origDelay
+		osExit = origExit
+		execCommandContext = origCmd
+	}()
+
+	exitCh := make(chan int, 2)
+	osExit = func(code int) {
+		exitCh <- code
+	}
+	execCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+		return exec.Command("echo", "mocked")
+	}
+
+	res, ok := runAction(context.Background(), "restart")
+	if !ok || !strings.Contains(res, "restarting client binary") {
+		t.Fatalf("unexpected restart result: %s", res)
+	}
+	select {
+	case code := <-exitCh:
+		if code != 0 {
+			t.Errorf("expected exit code 0, got %d", code)
+		}
+	case <-time.After(time.Second):
+		t.Error("timed out waiting for restart exit")
+	}
+
+	res, ok = runAction(context.Background(), "reboot")
+	if !ok || res != "mocked" {
+		t.Fatalf("unexpected reboot result: %s", res)
+	}
+
+	res, ok = runAction(context.Background(), "update")
+	if !ok || res != "mocked" {
+		t.Fatalf("unexpected update result: %s", res)
+	}
+	select {
+	case code := <-exitCh:
+		if code != 0 {
+			t.Errorf("expected exit code 0, got %d", code)
+		}
+	case <-time.After(time.Second):
+		t.Error("timed out waiting for update exit")
+	}
+
+	res, ok = runAction(context.Background(), "clear_backup")
+	if !ok || res != "mocked" {
+		t.Fatalf("unexpected clear_backup result: %s", res)
+	}
+
+	res, ok = runAction(context.Background(), "clear-backup")
+	if !ok || res != "mocked" {
+		t.Fatalf("unexpected clear-backup result: %s", res)
 	}
 }

@@ -775,8 +775,13 @@ class ChallengerM2StressHarness(unittest.TestCase):
         devices = reg.list_devices()
         self.assertEqual(len(devices), 20)
 
-        # Verify GET /devices returns all 20 devices
-        status, headers, body = _http_req("GET", self.port, "/devices")
+        # Verify GET /devices requires auth and returns all 20 devices
+        s_unauth, _, _ = _http_req("GET", self.port, "/devices")
+        self.assertEqual(s_unauth, 403)
+
+        status, headers, body = _http_req(
+            "GET", self.port, "/devices", headers=_auth_headers()
+        )
         self.assertEqual(status, 200)
         data = json.loads(body.decode("utf-8"))
         self.assertEqual(len(data["devices"]), 20)

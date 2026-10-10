@@ -414,7 +414,11 @@ class TestIndexCachingAndLifecycle(unittest.TestCase):
                     content=zip_bytes,
                 )
             )
-            res = t2.ensure_index()
+            # When cold and wait=False, ensure_index dispatches background rebuild and returns None
+            self.assertIsNone(t2.ensure_index(wait=False))
+
+            # When wait=True, ensure_index rebuilds synchronously and returns the index
+            res = t2.ensure_index(wait=True)
             self.assertIsNotNone(res)
             self.assertEqual(res["route"], "126")
             self.assertIn("A", res["trips"])
@@ -425,7 +429,7 @@ class TestIndexCachingAndLifecycle(unittest.TestCase):
                 cache_dir=os.path.join(tmpdir, "err_cache"),
             )
             t3.get_token = MagicMock(side_effect=Exception("network error"))
-            self.assertIsNone(t3.ensure_index())
+            self.assertIsNone(t3.ensure_index(wait=True))
 
 
 class TestRealtimeFetching(unittest.TestCase):

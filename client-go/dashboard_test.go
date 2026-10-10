@@ -366,6 +366,49 @@ func TestFetchAndDrawDashboard_AppliesLightingHeaders(t *testing.T) {
 	}
 }
 
+func TestFetchAndDrawDashboard_AppliesLightingAndActionOn304(t *testing.T) {
+	patchRuntime(t)
+	var ranAction bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Kindle-Brightness", "15")
+		w.Header().Set("X-Kindle-Warmth", "8")
+		w.Header().Set("X-Tracker-Action", "framework-state")
+		w.Header().Set("X-Kindle-Poll-Interval", "600")
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+	GetBatteryInfo = func() BatteryInfo { return BatteryInfo{Level: 88} }
+
+	var setProps []string
+	origCtx := execCommandContext
+	execCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+		if name == "lipc-get-prop" {
+			return exec.CommandContext(ctx, "echo", "0")
+		}
+		if name == "lipc-set-prop" && len(arg) >= 4 {
+			setProps = append(setProps, arg[2])
+		}
+		if name == "sh" {
+			ranAction = true
+		}
+		return exec.CommandContext(ctx, "true")
+	}
+	defer func() { execCommandContext = origCtx }()
+
+	tc := NewTrackerClient(srv.URL, "auto")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tc.fetchAndDrawDashboard(ctx, cancel)
+
+	joined := strings.Join(setProps, ",")
+	if !strings.Contains(joined, "flIntensity") || !strings.Contains(joined, "schedAmberLevel") {
+		t.Errorf("expected lighting props to be set on 304, got %v", setProps)
+	}
+	if !ranAction {
+		t.Error("expected requested action to run on 304")
+	}
+}
+
 func TestFetchAndDrawDashboard_RunsRequestedAction(t *testing.T) {
 	patchRuntime(t)
 	png := []byte{0x89, 0x50, 0x4E, 0x47}
