@@ -231,6 +231,10 @@ func (tc *TrackerClient) maybeUpdateBinary(ctx context.Context, serverVer, serve
 		return false
 	}
 	req.Header.Set("X-Tracker-Client-ID", tc.getClientID())
+	req.Header.Set("X-Tracker-Client-Version", Version)
+	if fw := GetFirmwareVersion(); fw != "" {
+		req.Header.Set("X-Tracker-Firmware", fw)
+	}
 	resp, err := otaHTTPClient.Do(req)
 	if err != nil {
 		recordOTAFailure(serverSHA)
@@ -276,6 +280,10 @@ func (tc *TrackerClient) maybeUpdateBinary(ctx context.Context, serverVer, serve
 		return false
 	}
 	binReq.Header.Set("X-Tracker-Client-ID", tc.getClientID())
+	binReq.Header.Set("X-Tracker-Client-Version", Version)
+	if fw := GetFirmwareVersion(); fw != "" {
+		binReq.Header.Set("X-Tracker-Firmware", fw)
+	}
 	binResp, err := otaHTTPClient.Do(binReq)
 	if err != nil {
 		recordOTAFailure(serverSHA)
@@ -382,6 +390,10 @@ func (tc *TrackerClient) fetchAndDrawDashboard(ctx context.Context, exitCancel c
 	}
 	req.Header.Set(otasig.NonceHeader, nonce)
 	req.Header.Set("X-Tracker-Client-ID", tc.getClientID())
+	req.Header.Set("X-Tracker-Client-Version", Version)
+	if fw := GetFirmwareVersion(); fw != "" {
+		req.Header.Set("X-Tracker-Firmware", fw)
+	}
 
 	req.Header.Set("X-Kindle-Battery", strconv.Itoa(batt.Level))
 	req.Header.Set("X-Kindle-Charging", strconv.Itoa(chargeVal))

@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -131,4 +132,55 @@ func (tc *TrackerClient) rawTouchToDesign(px, py int32) (int32, int32) {
 	dx := (wl - 1 - float64(py)) / scale
 	dy := float64(px) / scale
 	return int32(dx + 0.5), int32(dy + 0.5)
+}
+
+var (
+	firmwareOnce   sync.Once
+	cachedFirmware string
+)
+
+// ReadFirmwareVersion inspects candidate firmware files (/etc/prettyversion.txt, /etc/version)
+// and extracts a clean firmware identifier, such as "Kindle 5.18.6" or "5.16.2".
+// Extraneous parenthesized build hashes like (~~otaVersion~~) are stripped.
+func ReadFirmwareVersion(readFile func(string) ([]byte, error)) string {
+	if readFile == nil {
+		return ""
+	}
+	for _, p := range []string{"/etc/prettyversion.txt", "/etc/version"} {
+		data, err := readFile(p)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, raw := range lines {
+			line := strings.TrimSpace(raw)
+			if line == "" {
+				continue
+			}
+			if idx := strings.Index(line, "("); idx > 0 {
+				line = strings.TrimSpace(line[:idx])
+			}
+			if line != "" {
+				if len(line) > 32 {
+					line = line[:32]
+				}
+				return line
+			}
+		}
+	}
+	return ""
+}
+
+// GetFirmwareVersion returns the detected Kindle firmware version, cached across calls.
+func GetFirmwareVersion() string {
+	firmwareOnce.Do(func() {
+		cachedFirmware = ReadFirmwareVersion(osReadFile)
+	})
+	return cachedFirmware
+}
+
+// resetFirmwareCache resets cached firmware for test isolation.
+func resetFirmwareCache() {
+	firmwareOnce = sync.Once{}
+	cachedFirmware = ""
 }
