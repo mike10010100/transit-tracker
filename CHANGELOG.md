@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.35.11] - 2026-10-10
+
+### Added
+
+- **Automated Mermaid Diagram Validation**: Added standalone validator `scripts/check_mermaid.py` and unit test suite `tests/test_docs_mermaid.py` ensuring all Markdown documentation diagrams (`README.md`, `docs/`) conform to Mermaid syntax rules (preventing unquoted delimiters in edge labels, unquoted nested delimiters in node labels, unclosed subgraphs, and mismatched blocks).
+- **Mermaid Makefile & CI Quality Gates**: Added `make check-mermaid` target, integrated into `make lint`, and added automated validation step in `.github/workflows/ci.yml`.
+
+### Fixed
+
+- **README Architecture Overview Diagram**: Wrapped edge labels containing parentheses and special characters (`(Signed Binary & Manifest)`) in double quotes, fixing GitHub rich render parser error (`got 'PS'`).
+- **Cross-Platform Test Font & Stress Resilience**: Updated font fallback paths in `tests/test_render_dashboard.py` and connection retry backlog handling in `tests/test_challenger_m2_harness.py` for macOS compatibility.
+
 ## [1.35.10] - 2026-10-10
 
 ### Added

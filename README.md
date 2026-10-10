@@ -56,8 +56,8 @@ flowchart TD
     NJT --> Tracker
     GQL --> Tracker
     GBFS --> Tracker
-    Server -->|dashboard.png?kindle=pw5| HttpEngine
-    Server -->|tracker-arm (Signed Binary & Manifest)| HttpEngine
+    Server -->|"dashboard.png?kindle=pw5"| HttpEngine
+    Server -->|"tracker-arm (Signed Binary & Manifest)"| HttpEngine
 ```
 
 The application version is defined once in [`VERSION`](VERSION). The Python

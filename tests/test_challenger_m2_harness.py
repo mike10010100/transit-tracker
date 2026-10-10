@@ -34,11 +34,18 @@ def _http_req(
         headers=headers or {},
         method=method,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status, dict(resp.headers), resp.read()
-    except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers), e.read()
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, dict(resp.headers), resp.read()
+        except urllib.error.HTTPError as e:
+            return e.code, dict(e.headers), e.read()
+        except (urllib.error.URLError, ConnectionResetError, OSError):
+            if attempt == 2:
+                raise
+            import time
+
+            time.sleep(0.05 * (attempt + 1))
 
 
 def _auth_headers(extra: dict = None):
@@ -61,7 +68,10 @@ class ChallengerM2StressHarness(unittest.TestCase):
         cls._orig_token = server.CONTROL_TOKEN
         server.CONTROL_TOKEN = "test-token-challenger"
 
-        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), DashboardHandler)
+        class _StressHTTPServer(ThreadingHTTPServer):
+            request_queue_size = 64
+
+        cls.httpd = _StressHTTPServer(("127.0.0.1", 0), DashboardHandler)
         cls.port = cls.httpd.server_address[1]
         cls.server_thread = threading.Thread(
             target=cls.httpd.serve_forever, daemon=True

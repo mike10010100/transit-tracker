@@ -131,7 +131,10 @@ jobs:
         run: make fmt-py-check
 
       - name: Lint (ruff)
-        run: python -m ruff check server tests
+        run: python -m ruff check server tests scripts
+
+      - name: Validate Mermaid Documentation Syntax
+        run: make check-mermaid
 
       - name: Static Type Checking (mypy)
         run: python -m mypy server
