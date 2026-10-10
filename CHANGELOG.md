@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.35.12] - 2026-10-10
+
+### Changed
+
+- **Architecture Overview Diagram Layout**: Redesigned the Mermaid architecture diagram in `README.md` into a vertically aligned 3-tier structure (External Transit Telemetry -> Host Python Server -> Kindle Paperwhite 5). Eliminates side-by-side subgraph crowding, crooked edges, and overlapping labels for a clean, readable presentation.
+
 ## [1.35.11] - 2026-10-10
 
 ### Added
