@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.35.7] - 2026-10-10
+
+### Changed
+
+- **CI Workflow Modernization**: Upgraded `actions/checkout` to `@3d3c42e5aac5ba805825da76410c181273ba90b1` (v7.0.1) and `actions/setup-python` to `@5fda3b95a4ea91299a34e894583c3862153e4b97` (v7.0.0), resolving Node.js 20 deprecation warnings on GitHub Actions runners while preserving commit SHA cryptographic pinning.
+- **Dependabot Batching & Strategy**: Added update groups (`github-actions`, `go-dependencies`, `python-dependencies`) and `versioning-strategy: increase-if-necessary` to `.github/dependabot.yml` to prevent automated PR spam and eliminate conflicting multi-PR dependency races.
+
 ## [1.35.6] - 2026-10-10
 
 ### Security
