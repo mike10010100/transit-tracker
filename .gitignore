@@ -21,3 +21,6 @@ server_identity.key
 server_identity.cert.json
 # Local runtime cache (GTFS index, auto-generated control token).
 cache/
+.hypothesis/
+.mutmut-cache
+mutants/

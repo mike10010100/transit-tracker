@@ -468,7 +468,7 @@ def render_evening_view(
                     [(cx0, body_y0 + 6), (cx0, cb_y1 - 6)], fill="#dddddd", width=1
                 )
 
-            walk_str = f"{c['walk_min']} MIN"
+            walk_str = f"{c.get('walk_min', 0)} MIN"
             wb = draw.textbbox((0, 0), walk_str, font=font_cb_walk)
             ww = wb[2] - wb[0]
             badge_x0 = cx1 - ww - 18
@@ -512,14 +512,17 @@ def render_evening_view(
                     font=font_cb_sub,
                 )
             else:
-                stat_str = f"{c['ebikes']} Ebikes  •  {c['classic']} Classic"
+                ebikes_count = c.get("ebikes", 0)
+                classic_count = c.get("classic", 0)
+                docks_count = c.get("docks", 0)
+                stat_str = f"{ebikes_count} Ebikes  •  {classic_count} Classic"
                 draw.text(
                     (cx0 + 14, body_y0 + r_stat),
                     stat_str,
                     fill="black",
                     font=font_cb_stat,
                 )
-                docks_str = f"{c['docks']} Docks available"
+                docks_str = f"{docks_count} Docks available"
                 draw.text(
                     (cx0 + 14, body_y0 + r_sub),
                     docks_str,
@@ -527,11 +530,11 @@ def render_evening_view(
                     font=font_cb_sub,
                 )
                 if is_tall:
-                    if c["ebikes"] >= 4:
+                    if ebikes_count >= 4:
                         cb_badge = "● GOOD AVAILABILITY"
-                    elif c["ebikes"] > 0:
+                    elif ebikes_count > 0:
                         cb_badge = "● LIMITED E-BIKES"
-                    elif c["docks"] == 0:
+                    elif docks_count == 0:
                         cb_badge = "● DOCKS FULL"
                     else:
                         cb_badge = "● CLASSIC ONLY"

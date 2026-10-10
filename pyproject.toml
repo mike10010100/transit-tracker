@@ -48,3 +48,30 @@ omit = [
 [tool.coverage.report]
 fail_under = 92
 show_missing = true
+
+[tool.pytest.ini_options]
+pythonpath = ["server"]
+
+[tool.mutmut]
+paths_to_mutate = ["server/identity.py"]
+tests_dir = ["tests/test_security_spec.py"]
+also_copy = [
+    "server/bus_tracker.py",
+    "server/canvas.py",
+    "server/citibike.py",
+    "server/device_registry.py",
+    "server/discovery.py",
+    "server/evening_view.py",
+    "server/gtfs_bus.py",
+    "server/kindle_image.py",
+    "server/logsafe.py",
+    "server/morning_view.py",
+    "server/ota.py",
+    "server/paths.py",
+    "server/render_dashboard.py",
+    "server/schedule.py",
+    "server/server.py",
+    "server/version.py",
+    "client-go/",
+]
+

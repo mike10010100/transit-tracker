@@ -1,4 +1,4 @@
-.PHONY: all check test test-go test-py test-sh lint lint-go lint-py vet fmt fmt-go fmt-py fmt-check fmt-go-check fmt-py-check audit audit-go audit-py coverage coverage-go coverage-py check-sh build keygen pubkey verify-release deploy clean
+.PHONY: all check test test-go test-py test-sh fuzz mutate-py lint lint-go lint-py vet fmt fmt-go fmt-py fmt-check fmt-go-check fmt-py-check audit audit-go audit-py coverage coverage-go coverage-py check-sh build keygen pubkey verify-release deploy clean
 
 SHELL := /bin/bash
 
@@ -26,6 +26,21 @@ test-sh:
 	@echo "==> Running Shell test suite..."
 	@bash tests/test_launcher.sh
 	@bash tests/test_version_bump.sh
+
+fuzz:
+	@echo "==> Running Go native fuzz targets (smoke test)..."
+	@cd client-go && go test -run=^FuzzParseInputEvents$$ -fuzz=^FuzzParseInputEvents$$ -fuzztime=3s .
+	@cd client-go/internal/otasig && go test -run=^FuzzVerifyManifest$$ -fuzz=^FuzzVerifyManifest$$ -fuzztime=3s .
+	@cd client-go/internal/otasig && go test -run=^FuzzVerifyCert$$ -fuzz=^FuzzVerifyCert$$ -fuzztime=3s .
+	@cd client-go/internal/otasig && go test -run=^FuzzParseSemver$$ -fuzz=^FuzzParseSemver$$ -fuzztime=3s .
+	@cd client-go/internal/otasig && go test -run=^FuzzVerifyResponse$$ -fuzz=^FuzzVerifyResponse$$ -fuzztime=3s .
+
+mutate-py:
+	@echo "==> Running targeted Python mutation testing on security layer..."
+	@rm -rf mutants .mutmut-cache
+	@mutmut run
+	@rm -rf mutants .mutmut-cache
+
 
 vet:
 	@echo "==> Running go vet static analysis..."
@@ -189,6 +204,6 @@ deploy:
 
 clean:
 	@rm -f tracker-arm tracker-arm.new tracker-arm.manifest.json tracker-arm.manifest.json.new server/tracker-arm client-go/client-go client-go/cover.out server_identity.key server_identity.cert.json
-	@rm -rf htmlcov .coverage
+	@rm -rf htmlcov .coverage mutants .mutmut-cache .hypothesis
 	@find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	@find . -name "*.pyc" -delete 2>/dev/null || true

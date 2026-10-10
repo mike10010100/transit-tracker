@@ -41,10 +41,13 @@ func DetectEventStep(buf []byte, n int) int {
 	if runtime.GOARCH == "arm" || runtime.GOARCH == "386" || runtime.GOARCH == "mips" {
 		return 16
 	}
-	if n >= 24 && n%24 == 0 && buf[16] <= 5 && buf[17] == 0 {
+	if n > len(buf) {
+		n = len(buf)
+	}
+	if n >= 24 && n%24 == 0 && len(buf) >= 18 && buf[16] <= 5 && buf[17] == 0 {
 		return 24
 	}
-	if n >= 16 && n%16 == 0 && buf[8] <= 5 && buf[9] == 0 {
+	if n >= 16 && n%16 == 0 && len(buf) >= 10 && buf[8] <= 5 && buf[9] == 0 {
 		return 16
 	}
 	return 16
@@ -52,6 +55,9 @@ func DetectEventStep(buf []byte, n int) int {
 
 // ParseInputEvents parses raw byte buffer into a slice of RawEventMsg
 func ParseInputEvents(buf []byte, n int, device string) []RawEventMsg {
+	if n > len(buf) {
+		n = len(buf)
+	}
 	if n < 16 {
 		return nil
 	}
