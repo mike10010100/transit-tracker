@@ -151,9 +151,7 @@ class NJTransitBusTracker:
     Handles automated 24-hour token minting and renewal.
     """
 
-    DEFAULT_BASE_URL = os.environ.get(
-        "NJT_BASE_URL", "https://testpcsdata.njtransit.com"
-    )
+    DEFAULT_BASE_URL = os.environ.get("NJT_BASE_URL", "https://pcsdata.njtransit.com")
 
     def __init__(
         self,

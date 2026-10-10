@@ -68,6 +68,8 @@ import socket
 import socketserver
 import sys
 
+import hashlib
+
 binary_path = sys.argv[1]
 ready_file = sys.argv[2]
 mode = sys.argv[3] if len(sys.argv) > 3 else "normal"
@@ -79,6 +81,12 @@ elif mode == "--pseudo-elf":
 else:
     with open(binary_path, "rb") as f:
         bin_data = f.read()
+
+real_sha256 = hashlib.sha256(bin_data).hexdigest()
+if mode == "--bad-sha":
+    manifest_sha = "0000000000000000000000000000000000000000000000000000000000000000"
+else:
+    manifest_sha = real_sha256
 
 class MockHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -109,6 +117,17 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif self.path == "/tracker-arm.manifest":
+            if mode in ("--missing-arm", "--missing-manifest"):
+                self.send_response(404)
+                self.end_headers()
+                return
+            m_body = f'{{"format":"transit-tracker-ota-v1","version":"1.0.0-test","sha256":"{manifest_sha}","size":{len(bin_data)}}}'.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(m_body)))
+            self.end_headers()
+            self.wfile.write(m_body)
         elif self.path == "/tracker-arm":
             if mode == "--missing-arm":
                 self.send_response(404)
@@ -683,5 +702,117 @@ if [ -f "$CONFIG_FILE8" ]; then
     exit 1
 fi
 echo "  [PASS] Foreign IoT device rejected by strict service verification"
+
+# -----------------------------------------------------------------------------
+# TEST 9: Reject binary with SHA-256 checksum mismatch
+# -----------------------------------------------------------------------------
+echo "==> Test 9: Reject binary with SHA-256 checksum mismatch..."
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+
+READY_FILE9="$TEST_TMP/server9.ready"
+python3 "$MOCK_SERVER_PY" "$DUMMY_BIN" "$READY_FILE9" --bad-sha &
+SERVER_PID=$!
+
+for _ in $(seq 1 30); do
+    if [ -s "$READY_FILE9" ]; then
+        break
+    fi
+    sleep 0.1
+done
+MOCK_PORT9="$(tr -d '[:space:]' < "$READY_FILE9")"
+
+TEST9_DIR="$TEST_TMP/test9"
+mkdir -p "$TEST9_DIR"
+CONFIG_FILE9="$TEST9_DIR/tracker_server.txt"
+SENTINEL_FILE9="$TEST9_DIR/sentinel.txt"
+BIN_TARGET9="$TEST9_DIR/tracker-arm"
+BACKUP_TARGET9="$TEST9_DIR/tracker_backup"
+LOG_TARGET9="$TEST9_DIR/bootstrap.log"
+
+set +e
+(
+    export SERVER=""
+    export SERVER_CONFIG="$CONFIG_FILE9"
+    export FALLBACK_CONFIG="$TEST9_DIR/fallback.txt"
+    export BINARY="$BIN_TARGET9"
+    export BACKUP="$BACKUP_TARGET9"
+    export LOG_FILE="$LOG_TARGET9"
+    export SERVER_PORT="$MOCK_PORT9"
+    export MDNS_HOST="127.0.0.1"
+    export TEST_LAUNCHER_SENTINEL="$SENTINEL_FILE9"
+
+    sh "$LAUNCHER"
+)
+EXIT_CODE9=$?
+set -e
+
+if [ "$EXIT_CODE9" -eq 0 ]; then
+    echo "ERROR: Launcher unexpectedly succeeded when binary had SHA-256 mismatch" >&2
+    exit 1
+fi
+if [ -f "$BIN_TARGET9" ]; then
+    echo "ERROR: Binary with invalid SHA-256 was installed to $BIN_TARGET9" >&2
+    exit 1
+fi
+if [ -f "$SENTINEL_FILE9" ]; then
+    echo "ERROR: Binary with invalid SHA-256 was executed" >&2
+    exit 1
+fi
+echo "  [PASS] Download with SHA-256 mismatch rejected cleanly"
+
+# -----------------------------------------------------------------------------
+# TEST 10: Reject binary when release manifest is missing
+# -----------------------------------------------------------------------------
+echo "==> Test 10: Reject binary when release manifest is missing..."
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+
+READY_FILE10="$TEST_TMP/server10.ready"
+python3 "$MOCK_SERVER_PY" "$DUMMY_BIN" "$READY_FILE10" --missing-manifest &
+SERVER_PID=$!
+
+for _ in $(seq 1 30); do
+    if [ -s "$READY_FILE10" ]; then
+        break
+    fi
+    sleep 0.1
+done
+MOCK_PORT10="$(tr -d '[:space:]' < "$READY_FILE10")"
+
+TEST10_DIR="$TEST_TMP/test10"
+mkdir -p "$TEST10_DIR"
+CONFIG_FILE10="$TEST10_DIR/tracker_server.txt"
+SENTINEL_FILE10="$TEST10_DIR/sentinel.txt"
+BIN_TARGET10="$TEST10_DIR/tracker-arm"
+BACKUP_TARGET10="$TEST10_DIR/tracker_backup"
+LOG_TARGET10="$TEST10_DIR/bootstrap.log"
+
+set +e
+(
+    export SERVER=""
+    export SERVER_CONFIG="$CONFIG_FILE10"
+    export FALLBACK_CONFIG="$TEST10_DIR/fallback.txt"
+    export BINARY="$BIN_TARGET10"
+    export BACKUP="$BACKUP_TARGET10"
+    export LOG_FILE="$LOG_TARGET10"
+    export SERVER_PORT="$MOCK_PORT10"
+    export MDNS_HOST="127.0.0.1"
+    export TEST_LAUNCHER_SENTINEL="$SENTINEL_FILE10"
+
+    sh "$LAUNCHER"
+)
+EXIT_CODE10=$?
+set -e
+
+if [ "$EXIT_CODE10" -eq 0 ]; then
+    echo "ERROR: Launcher unexpectedly succeeded when manifest was missing" >&2
+    exit 1
+fi
+if [ -f "$BIN_TARGET10" ]; then
+    echo "ERROR: Binary was installed despite missing manifest" >&2
+    exit 1
+fi
+echo "  [PASS] Download with missing manifest rejected cleanly"
 
 echo "==> All launcher integration tests passed cleanly!"

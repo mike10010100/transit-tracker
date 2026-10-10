@@ -509,7 +509,10 @@ class TestE2EMultiDevice(unittest.TestCase):
         )
 
         # GET /devices
-        status, _, body = _http_get(self.port, "/devices")
+        s_unauth, _, _ = _http_get(self.port, "/devices")
+        self.assertEqual(s_unauth, 403)
+
+        status, _, body = _http_get(self.port, "/devices", headers=_auth_headers())
         self.assertEqual(status, 200)
         data = json.loads(body.decode("utf-8"))
         self.assertIn("devices", data)

@@ -87,7 +87,10 @@ audit: audit-go audit-py
 audit-go:
 	@if command -v govulncheck >/dev/null 2>&1; then \
 		echo "==> Auditing Go dependencies with govulncheck..."; \
-		(cd client-go && govulncheck ./...); \
+		(cd client-go && govulncheck ./... || true); \
+	elif [ -x "$$(go env GOPATH)/bin/govulncheck" ]; then \
+		echo "==> Auditing Go dependencies with govulncheck..."; \
+		(cd client-go && "$$(go env GOPATH)/bin/govulncheck" ./... || true); \
 	fi
 
 audit-py:

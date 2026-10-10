@@ -4,9 +4,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
+)
+
+var (
+	osExit    = os.Exit
+	exitDelay = 500 * time.Millisecond
 )
 
 // DeviceAction is a named, allowlisted maintenance action the server can ask a
@@ -24,15 +30,57 @@ var defaultActionTimeout = 60 * time.Second
 
 // deviceActions maps action names to their implementations.
 var deviceActions = map[string]DeviceAction{
+	"restart":          {Fn: actionRestart},
+	"reboot":           {Fn: actionReboot},
+	"update":           {Fn: actionUpdate},
+	"clear_backup":     {Fn: actionClearBackup},
+	"clear-backup":     {Fn: actionClearBackup},
 	"disable-ads":      {Fn: actionDisableAds},
+	"disable_ads":      {Fn: actionDisableAds},
 	"stop-framework":   {Fn: actionStopFramework},
+	"stop_framework":   {Fn: actionStopFramework},
 	"start-framework":  {Fn: actionStartFramework},
+	"start_framework":  {Fn: actionStartFramework},
 	"framework-state":  {Fn: actionFrameworkState},
+	"framework_state":  {Fn: actionFrameworkState},
 	"sleep-test":       {Fn: actionSleepTest},
+	"sleep_test":       {Fn: actionSleepTest},
 	"rtc-suspend":      {Fn: actionRTCSuspend, Timeout: 5 * time.Minute},
+	"rtc_suspend":      {Fn: actionRTCSuspend, Timeout: 5 * time.Minute},
 	"input-wake-probe": {Fn: actionInputWakeProbe},
+	"input_wake_probe": {Fn: actionInputWakeProbe},
 	"touch-wake-test":  {Fn: actionTouchWakeTest, Timeout: 7 * time.Minute},
+	"touch_wake_test":  {Fn: actionTouchWakeTest, Timeout: 7 * time.Minute},
 	"touch-wake-probe": {Fn: actionTouchWakeProbe},
+	"touch_wake_probe": {Fn: actionTouchWakeProbe},
+}
+
+func actionRestart(ctx context.Context) string {
+	go func() {
+		if exitDelay > 0 {
+			time.Sleep(exitDelay)
+		}
+		osExit(0)
+	}()
+	return "restarting client binary..."
+}
+
+func actionReboot(ctx context.Context) string {
+	return shell(ctx, "reboot 2>&1 || shutdown -r now 2>&1")
+}
+
+func actionUpdate(ctx context.Context) string {
+	go func() {
+		if exitDelay > 0 {
+			time.Sleep(exitDelay)
+		}
+		osExit(0)
+	}()
+	return shell(ctx, "rm -f /tmp/tracker-arm /tmp/tracker 2>&1; echo update scheduled on restart")
+}
+
+func actionClearBackup(ctx context.Context) string {
+	return shell(ctx, "rm -rf /mnt/us/documents/tracker_backup /tmp/tracker_backup* 2>&1; echo done")
 }
 
 // runAction executes a named action and returns a human-readable result.

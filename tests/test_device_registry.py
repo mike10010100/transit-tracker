@@ -278,6 +278,59 @@ class TestDeviceRegistryUnit(unittest.TestCase):
             lines = f.readlines()
         self.assertEqual(len(lines), 250)
 
+    def test_registry_max_devices_evicts_oldest_offline(self):
+        reg = DeviceRegistry(max_devices=3)
+        reg.get_or_register("dev-1")
+        reg.get_or_register("dev-2")
+        reg.get_or_register("dev-3")
+
+        # Mark dev-1 offline (last seen 500s ago)
+        reg.get_device("dev-1").last_seen = time.time() - 500.0
+        reg.get_device("dev-2").last_seen = time.time() - 10.0
+        reg.get_device("dev-3").last_seen = time.time() - 5.0
+
+        # Adding dev-4 exceeds limit 3 -> must evict dev-1
+        reg.get_or_register("dev-4")
+        self.assertLessEqual(len(reg._devices), 3)
+        self.assertIsNone(reg.get_device("dev-1"))
+        self.assertIsNotNone(reg.get_device("dev-4"))
+
+    def test_log_file_truncation_when_exceeding_max_size(self):
+        import device_registry as dreg
+
+        orig_max = dreg.MAX_LOG_FILE_SIZE
+        try:
+            dreg.MAX_LOG_FILE_SIZE = 1000  # 1 KB
+            # Append enough data to trigger rotation
+            chunk = "A" * 600 + "\n"
+            self.registry.append_log("rot-dev", chunk, self.temp_dir)
+            self.registry.append_log("rot-dev", chunk, self.temp_dir)
+            # File is now 1202 bytes, exceeding 1000 limit.
+            # Next append will truncate before appending.
+            self.registry.append_log("rot-dev", "B" * 200 + "\n", self.temp_dir)
+            log_path = os.path.join(self.temp_dir, "devices", "rot-dev", "client.log")
+            size = os.path.getsize(log_path)
+            self.assertLessEqual(size, 800)
+        finally:
+            dreg.MAX_LOG_FILE_SIZE = orig_max
+
+    def test_save_diagnostics_size_bounding(self):
+        import device_registry as dreg
+
+        orig_max = dreg.MAX_DIAG_FILE_SIZE
+        try:
+            dreg.MAX_DIAG_FILE_SIZE = 1000  # 1 KB
+            big_text = "D" * 5000
+            self.registry.save_diagnostics("diag-dev", big_text, self.temp_dir)
+            rec = self.registry.get_device("diag-dev")
+            self.assertLessEqual(len(rec.last_diagnostics_text), 1000)
+            diag_path = os.path.join(
+                self.temp_dir, "devices", "diag-dev", "diagnostics.txt"
+            )
+            self.assertLessEqual(os.path.getsize(diag_path), 1000)
+        finally:
+            dreg.MAX_DIAG_FILE_SIZE = orig_max
+
     def test_list_devices_sorting(self):
         now = time.time()
         r1 = self.registry.get_or_register("older")
@@ -532,7 +585,12 @@ class TestDeviceRegistryHTTPIntegration(unittest.TestCase):
             headers={"X-Tracker-Client-ID": "fleet-kindle-2"},
         )
 
-        status, headers, body = _http_get(self.port, "/devices")
+        status_unauth, _, _ = _http_get(self.port, "/devices")
+        self.assertEqual(status_unauth, 403)
+
+        status, headers, body = _http_get(
+            self.port, "/devices", headers=_auth_headers()
+        )
         self.assertEqual(status, 200)
         self.assertEqual(headers.get("Content-Type"), "application/json")
 

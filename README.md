@@ -113,7 +113,8 @@ cd transit-tracker
 
 # 2. (Optional) Configure NJ Transit credentials
 cp .env.example .env
-# Edit .env with your credentials if desired
+chmod 600 .env
+# Edit .env with your credentials if desired (NJT_BASE_URL defaults to https://pcsdata.njtransit.com)
 
 # 3. Start in background
 docker compose up -d
@@ -125,6 +126,8 @@ docker compose up -d
 
 ```bash
 pip install -r requirements.txt
+cp .env.example .env
+chmod 600 .env
 python server/server.py
 ```
 - **Web UI (Auto-reloading):** `http://localhost:8000`
@@ -132,7 +135,7 @@ python server/server.py
 
 ### Control Endpoints
 
-State-mutating control plane operations (`POST /stop`, `POST /resume`, `POST /mode`, `POST /action`, `POST /diag/request`) and diagnostics reads (`GET /mode`, `GET /action`, `GET /diag`) require authentication via the `X-Tracker-Token` header:
+State-mutating control plane operations (`POST /stop`, `POST /resume`, `POST /mode`, `POST /action`, `POST /diag/request`) and query endpoints (`GET /devices`, `GET /mode`, `GET /action`, `GET /diag`) require authentication via the `X-Tracker-Token` header:
 
 ```bash
 export TRACKER_CONTROL_TOKEN=my-secret

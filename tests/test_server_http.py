@@ -686,6 +686,18 @@ class TestServerCoverageAdditions(ServerHTTPTestBase):
             self.assertEqual(status, 403)
             self.assertEqual(len(body), 0)
 
+    def test_get_devices_requires_auth(self):
+        status_unauth, _, _ = _http("GET", self.port, "/devices")
+        self.assertEqual(status_unauth, 403)
+
+        status_auth, headers, body = _http(
+            "GET", self.port, "/devices", headers=_auth_headers()
+        )
+        self.assertEqual(status_auth, 200)
+        self.assertEqual(headers.get("Content-Type"), "application/json")
+        data = json.loads(body.decode("utf-8"))
+        self.assertIn("devices", data)
+
     def test_post_log_and_diag_read_errors(self):
         handler = DashboardHandler.__new__(DashboardHandler)
         handler.command = "POST"
@@ -903,8 +915,12 @@ class TestMultiDeviceWebInterface(ServerHTTPTestBase):
     def test_csp_nonce_and_script_security(self):
         status, headers, body = _http_get(self.port, "/")
         self.assertEqual(status, 200)
+        self.assertEqual(headers.get("X-Frame-Options"), "DENY")
+        self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
         csp = headers.get("Content-Security-Policy", "")
         self.assertIn("script-src 'self' 'nonce-", csp)
+        self.assertIn("frame-ancestors 'none'", csp)
+        self.assertIn("object-src 'none'", csp)
 
         body_text = body.decode("utf-8")
         match_csp = re.search(r"nonce-([a-f0-9]+)", csp)

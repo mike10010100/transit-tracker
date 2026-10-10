@@ -21,7 +21,7 @@ except ImportError:
     Zeroconf = None  # type: ignore[assignment,misc]
     ServiceInfo = None  # type: ignore[assignment,misc]
 
-from bus_tracker import NJTransitBusTracker, normalize_arrival
+from bus_tracker import NJTransitBusTracker, describe_base_url, normalize_arrival
 from citibike import (
     CB_STATUS_ERROR,
     CitiBikeTracker,
@@ -304,6 +304,9 @@ def get_fresh_dashboard_image(
         use_mock=use_mock, interactive=interactive
     )
 
+    with _data_lock:
+        data_time = _data_cache["time"] if not use_mock else 0
+
     cache_key = (
         use_mock,
         view,
@@ -314,7 +317,7 @@ def get_fresh_dashboard_image(
         is_charging,
         presentation,
         status_note,
-        _data_cache["time"] if not use_mock else 0,
+        data_time,
     )
     with _render_lock:
         cached = _render_cache.get(cache_key)
@@ -368,8 +371,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _send_forbidden(self) -> None:
         msg = b"<h1>403 Forbidden</h1><p>Control endpoint requires a valid X-Tracker-Token header.</p>"
+        self.close_connection = True
         self.send_response(403)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Connection", "close")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(msg)))
         self.end_headers()
         if self.command != "HEAD":
@@ -377,6 +384,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _send_empty(self, code: int) -> None:
         self.send_response(code)
+        if code >= 400:
+            self.close_connection = True
+            self.send_header("Connection", "close")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -399,17 +409,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             length_hdr = self.headers.get("Content-Length")
             if length_hdr is None:
+                self.close_connection = True
                 self._send_empty(411)  # Length Required
                 return None
             length = int(length_hdr)
             if length < 0:
+                self.close_connection = True
                 self._send_empty(400)
                 return None
             if length > max_bytes:
+                self.close_connection = True
                 self._send_empty(413)  # Payload Too Large
                 return None
             return self.rfile.read(length)
         except (ValueError, OSError):
+            self.close_connection = True
             self._send_empty(400)
             return None
 
@@ -709,6 +723,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/devices":
+            if not check_control_auth(self):
+                self._send_forbidden()
+                return
             device_dicts = [d.to_dict() for d in registry.list_devices()]
             payload = json.dumps({"devices": device_dicts}, indent=2).encode("utf-8")
             self.send_response(200)
@@ -1238,7 +1255,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "default-src 'self'; "
                 "img-src 'self' data:; "
                 f"script-src 'self' 'nonce-{script_nonce}'; "
-                "style-src 'unsafe-inline'"
+                "style-src 'unsafe-inline'; "
+                "frame-ancestors 'none'; "
+                "object-src 'none'; "
+                "base-uri 'none'"
             )
 
             html_content = f"""<!DOCTYPE html>
@@ -1618,6 +1638,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Security-Policy", csp)
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self._write_body(payload)
@@ -1645,6 +1667,7 @@ if __name__ == "__main__":
     )
     print(f"  Identity status: {_identity_status}")
     print(f"  Control token:   {CONTROL_TOKEN}")
+    print(f"  {describe_base_url()}")
     print("==================================================")
 
     start_discovery_responder(http_port=PORT, version=SERVER_VERSION)

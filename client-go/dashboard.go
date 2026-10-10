@@ -441,6 +441,7 @@ func (tc *TrackerClient) fetchAndDrawDashboard(ctx context.Context, exitCancel c
 	// HTTP 304: dashboard unchanged
 	if resp.StatusCode == http.StatusNotModified {
 		pollSec := parsePollInterval(resp.Header.Get("X-Kindle-Poll-Interval"))
+		tc.processControlHeaders(ctx, resp.Header)
 		if tc.maybeUpdateBinary(ctx, serverVer, serverSHA) {
 			return 0
 		}
@@ -451,40 +452,14 @@ func (tc *TrackerClient) fetchAndDrawDashboard(ctx context.Context, exitCancel c
 		return 0
 	}
 
-	// Apply view and presentation
+	// Apply view
 	if resView := resp.Header.Get("X-Resolved-View"); resView != "" {
 		tc.mu.Lock()
 		tc.lastRenderedView = resView
 		tc.mu.Unlock()
 	}
-	tc.setPresentation(resp.Header.Get("X-Tracker-Presentation"))
 
-	// Diagnostics request
-	if diag := resp.Header.Get("X-Tracker-Diag"); diag != "" {
-		tc.postDiagnostics(diag == "full")
-	}
-
-	// Named device action
-	if action := resp.Header.Get("X-Tracker-Action"); action != "" {
-		result, known := runAction(ctx, action)
-		tc.waitForNetwork(ctx)
-		tc.logRemote(fmt.Sprintf("Device action %q ->\n%s", action, result))
-		if !known {
-			tc.logRemote(fmt.Sprintf("Unknown device action %q ignored.", action))
-		}
-	}
-
-	// Mode switch request
-	if want := strings.ToLower(strings.TrimSpace(resp.Header.Get("X-Tracker-Mode"))); want != "" && want != currentModeName() {
-		if flags := modeFlags(want); flags != nil {
-			tc.logRemote(fmt.Sprintf("Server requested run mode %q; relaunching.", want))
-			rebuiltArgs := buildReexecArgs(os.Args, server, tc.getViewMode(), tc.isManualViewActive())
-			rebuiltArgs = append(rebuiltArgs, flags...)
-			if err := sysExec(BinaryPath, rebuiltArgs, os.Environ()); err != nil {
-				tc.logRemote(fmt.Sprintf("Mode relaunch exec FAILED (%v); staying in %q.", err, currentModeName()))
-			}
-		}
-	}
+	tc.processControlHeaders(ctx, resp.Header)
 
 	serverPollSec := parsePollInterval(resp.Header.Get("X-Kindle-Poll-Interval"))
 
@@ -519,14 +494,50 @@ func (tc *TrackerClient) fetchAndDrawDashboard(ctx context.Context, exitCancel c
 		tc.mu.Unlock()
 	}
 
-	// Lighting control
+	if tc.maybeUpdateBinary(ctx, serverVer, serverSHA) {
+		return 0
+	}
+	return serverPollSec
+}
+
+func (tc *TrackerClient) processControlHeaders(ctx context.Context, header http.Header) {
+	tc.setPresentation(header.Get("X-Tracker-Presentation"))
+
+	// Diagnostics request
+	if diag := header.Get("X-Tracker-Diag"); diag != "" {
+		tc.postDiagnostics(diag == "full")
+	}
+
+	// Named device action
+	if action := header.Get("X-Tracker-Action"); action != "" {
+		result, known := runAction(ctx, action)
+		tc.waitForNetwork(ctx)
+		tc.logRemote(fmt.Sprintf("Device action %q ->\n%s", action, result))
+		if !known {
+			tc.logRemote(fmt.Sprintf("Unknown device action %q ignored.", action))
+		}
+	}
+
+	// Mode switch request
+	if want := strings.ToLower(strings.TrimSpace(header.Get("X-Tracker-Mode"))); want != "" && want != currentModeName() {
+		if flags := modeFlags(want); flags != nil {
+			tc.logRemote(fmt.Sprintf("Server requested run mode %q; relaunching.", want))
+			rebuiltArgs := buildReexecArgs(os.Args, tc.getServerURL(), tc.getViewMode(), tc.isManualViewActive())
+			rebuiltArgs = append(rebuiltArgs, flags...)
+			if err := sysExec(BinaryPath, rebuiltArgs, os.Environ()); err != nil {
+				tc.logRemote(fmt.Sprintf("Mode relaunch exec FAILED (%v); staying in %q.", err, currentModeName()))
+			}
+		}
+	}
+
+	// Commute auto-lighting control
 	tc.mu.Lock()
 	manualActive := time.Since(tc.manualLightTime) < ManualHoldDuration
 	tc.mu.Unlock()
 
 	if !manualActive {
-		brightStr := resp.Header.Get("X-Kindle-Brightness")
-		warmStr := resp.Header.Get("X-Kindle-Warmth")
+		brightStr := header.Get("X-Kindle-Brightness")
+		warmStr := header.Get("X-Kindle-Warmth")
 		currB := lipcGet("com.lab126.powerd", "flIntensity")
 		currW := lipcGet("com.lab126.powerd", "schedAmberLevel")
 
@@ -539,11 +550,6 @@ func (tc *TrackerClient) fetchAndDrawDashboard(ctx context.Context, exitCancel c
 			tc.logRemote(fmt.Sprintf("Commute auto-lighting applied: warmth %s -> %s", currW, warmStr))
 		}
 	}
-
-	if tc.maybeUpdateBinary(ctx, serverVer, serverSHA) {
-		return 0
-	}
-	return serverPollSec
 }
 
 // runPollLoop drives the fetch/OTA cycle until ctx is cancelled.

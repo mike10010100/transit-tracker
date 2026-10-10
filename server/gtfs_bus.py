@@ -335,7 +335,10 @@ class GTFSBusTracker:
                 with self._state_lock:
                     self._index = cached
                 return cached
-            return self.rebuild_index()
+            if wait:
+                return self.rebuild_index()
+            self._start_background_rebuild()
+            return None
         if wait:
             return self.rebuild_index()
         self._start_background_rebuild()
