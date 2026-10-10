@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.35.8] - 2026-10-10
+
+### Changed
+
+- **CI Action Upgrades**: Upgraded `actions/setup-go` to `@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e` (v7.0.0) and `hadolint/hadolint-action` to `@06be81baf89a55ffd0e24b8f04a4185738dd3387` (v3.5.0) via grouped Dependabot update.
+
 ## [1.35.7] - 2026-10-10
 
 ### Changed
