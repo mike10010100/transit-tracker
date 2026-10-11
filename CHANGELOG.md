@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.37.1] - 2026-10-10
+
+### Fixed
+
+- **Response Signing Backward Compatibility (`transit-tracker-resp-v1` & `v2`)**: Added server-side protocol negotiation and dual signature support in `server/identity.py` and `server/server.py`. Older deployed clients (such as `v1.35.x`) that only know `transit-tracker-resp-v1` (12 signed headers) are authenticated with `v1` signatures rather than rejected, allowing them to render dashboards and receive OTA updates seamlessly.
+- **Client Dual Format Verification**: Updated `client-go/internal/otasig/otasig.go` to verify against `transit-tracker-resp-v2` first, gracefully falling back to `transit-tracker-resp-v1` for backward compatibility.
+- **Kindle Library File Hiding & Migration**: Migrated Kindle client ID storage in `client-go/client_id.go` to `/mnt/us/documents/.tracker_client_id.txt` (hidden dotfile) so the Kindle ebook indexer no longer indexes the UUID as a document book on the Home/Library screen. Automatically migrates and removes legacy unhidden `/mnt/us/documents/tracker_client_id.txt` on startup.
+
+---
+
 ## [1.37.0] - 2026-10-10
 
 ### Added

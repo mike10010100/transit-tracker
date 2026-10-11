@@ -40,6 +40,8 @@ from discovery import (
 from gtfs_bus import GTFSBusTracker
 from identity import (
     NONCE_HEADER,
+    RESP_FORMAT_V1,
+    RESP_FORMAT_V2,
     is_valid_nonce,
     load_identity,
 )
@@ -486,6 +488,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception:
             return ""
 
+    def _resolve_resp_format(self) -> str:
+        req_fmt = self.headers.get("X-Tracker-Resp-Format", "").strip()
+        if req_fmt in (RESP_FORMAT_V1, RESP_FORMAT_V2):
+            return req_fmt
+        client_ver = self.headers.get("X-Tracker-Client-Version", "").strip()
+        if client_ver:
+            try:
+                parts = [int(p) for p in client_ver.split(".")[:3]]
+                if len(parts) == 3 and parts < [1, 36, 0]:
+                    return RESP_FORMAT_V1
+            except (ValueError, IndexError):
+                pass
+        return RESP_FORMAT_V2
+
     def do_HEAD(self):
         self.do_GET()
 
@@ -764,6 +780,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ("Cache-Control", "no-cache"),
             ]
             if is_valid_nonce(nonce) and _identity is not None:
+                resp_fmt = self._resolve_resp_format()
+                headers.append(("X-Tracker-Resp-Format", resp_fmt))
                 auth_hdrs = _identity.sign_response(
                     nonce=nonce,
                     path="/identity",
@@ -773,6 +791,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "content-type": "application/json",
                         "content-length": str(len(payload)),
                     },
+                    resp_format=resp_fmt,
                 )
                 headers.extend(auth_hdrs)
             self._send_tracker_headers(200, headers)
@@ -978,12 +997,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if tracker_stopped:
                 resp_headers = [("Content-Length", "0")]
                 if is_valid_nonce(nonce) and _identity is not None:
+                    resp_fmt = self._resolve_resp_format()
+                    resp_headers.append(("X-Tracker-Resp-Format", resp_fmt))
                     auth_hdrs = _identity.sign_response(
                         nonce=nonce,
                         path=parsed.path,
                         status=205,
                         body=b"",
                         headers={"content-length": "0"},
+                        resp_format=resp_fmt,
                     )
                     resp_headers.extend(auth_hdrs)
                 self.send_response(205)
@@ -1146,6 +1168,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except Exception:
                 local_ip = get_local_ip()
 
+            resp_fmt = self._resolve_resp_format()
             common_headers: list[tuple[str, str]] = [
                 ("ETag", etag),
                 ("X-Kindle-Poll-Interval", str(poll_interval)),
@@ -1154,6 +1177,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ("X-Resolved-View", resolve_view(render_view)),
                 ("X-Tracker-View", view_param),
                 ("X-Tracker-Policy", get_policy_header(sched)),
+                ("X-Tracker-Resp-Format", resp_fmt),
             ]
 
             valid_m = get_valid_manifest()
@@ -1180,6 +1204,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         status=304,
                         body=b"",
                         headers=hdr_map,
+                        resp_format=resp_fmt,
                     )
                     resp_304_headers.extend(auth_hdrs)
                 self._send_tracker_headers(304, resp_304_headers)
@@ -1206,6 +1231,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     status=200,
                     body=img_bytes,
                     headers=hdr_map,
+                    resp_format=resp_fmt,
                 )
                 full_headers.extend(auth_hdrs)
 

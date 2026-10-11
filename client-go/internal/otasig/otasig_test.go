@@ -185,6 +185,50 @@ func TestVectors_Response(t *testing.T) {
 	}
 }
 
+func TestVerifyResponse_V1Fallback(t *testing.T) {
+	skey := serverKey()
+	spub := PublicKeyOf(skey)
+	nonce := "0102030405060708090a0b0c0d0e0f10"
+	path := "/dashboard.png"
+	status := 200
+	body := []byte("test-payload")
+	bodySHA := SHA256Hex(body)
+
+	h := MapHeaders{
+		"etag":                   "\"12345\"",
+		"x-kindle-poll-interval": "60",
+		"x-tracker-presentation": "interactive",
+		"x-tracker-version":      "1.35.10",
+		"x-tracker-sha256":       "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd",
+		"x-resolved-view":        "evening",
+		"x-tracker-view":         "auto",
+	}
+
+	// Sign using v1 format
+	msgV1, err := ResponseMessageFor(ResponseFormatV1, nonce, path, status, bodySHA, h)
+	if err != nil {
+		t.Fatalf("ResponseMessageFor v1 failed: %v", err)
+	}
+	sigV1 := sign(skey, msgV1)
+
+	// VerifyResponse must succeed by falling back to v1
+	if err := VerifyResponse(spub, nonce, path, status, bodySHA, h, sigV1); err != nil {
+		t.Errorf("VerifyResponse failed on valid v1 signature: %v", err)
+	}
+
+	// Sign using v2 format
+	msgV2, err := ResponseMessageFor(ResponseFormatV2, nonce, path, status, bodySHA, h)
+	if err != nil {
+		t.Fatalf("ResponseMessageFor v2 failed: %v", err)
+	}
+	sigV2 := sign(skey, msgV2)
+
+	// VerifyResponse must succeed on v2
+	if err := VerifyResponse(spub, nonce, path, status, bodySHA, h, sigV2); err != nil {
+		t.Errorf("VerifyResponse failed on valid v2 signature: %v", err)
+	}
+}
+
 func TestVerifyResponse_Tamper(t *testing.T) {
 	v := loadVectors(t)
 	spub := PublicKeyOf(serverKey())

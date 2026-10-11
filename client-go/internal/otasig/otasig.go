@@ -27,9 +27,11 @@ import (
 // Protocol format identifiers. They are the first line of each signed message
 // and the "format" field of the JSON documents.
 const (
-	ManifestFormat = "transit-tracker-ota-v1"
-	CertFormat     = "transit-tracker-server-v1"
-	ResponseFormat = "transit-tracker-resp-v2"
+	ManifestFormat   = "transit-tracker-ota-v1"
+	CertFormat       = "transit-tracker-server-v1"
+	ResponseFormatV1 = "transit-tracker-resp-v1"
+	ResponseFormatV2 = "transit-tracker-resp-v2"
+	ResponseFormat   = ResponseFormatV2
 )
 
 // Size bounds shared by the client and the build tooling.
@@ -47,9 +49,24 @@ const (
 	AuthHeader  = "X-Tracker-Auth"
 )
 
-// SignedHeaders lists, in signing order, the lowercase response header names
-// covered by a response signature (§3). Treat it as read-only.
-var SignedHeaders = []string{
+// SignedHeadersV1 lists the response header names covered by v1 signatures.
+var SignedHeadersV1 = []string{
+	"etag",
+	"x-kindle-poll-interval",
+	"x-tracker-presentation",
+	"x-tracker-mode",
+	"x-tracker-action",
+	"x-tracker-diag",
+	"x-kindle-brightness",
+	"x-kindle-warmth",
+	"x-tracker-version",
+	"x-tracker-sha256",
+	"x-resolved-view",
+	"x-tracker-view",
+}
+
+// SignedHeadersV2 lists the response header names covered by v2 signatures (§3).
+var SignedHeadersV2 = []string{
 	"etag",
 	"x-kindle-poll-interval",
 	"x-tracker-presentation",
@@ -64,6 +81,10 @@ var SignedHeaders = []string{
 	"x-tracker-view",
 	"x-tracker-policy",
 }
+
+// SignedHeaders lists, in signing order, the lowercase response header names
+// covered by a response signature (§3). Treat it as read-only.
+var SignedHeaders = SignedHeadersV2
 
 var (
 	versionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
@@ -358,19 +379,23 @@ func NewNonce() (string, error) {
 // ValidNonce reports whether s matches ^[0-9a-f]{32}$.
 func ValidNonce(s string) bool { return nonceRe.MatchString(s) }
 
-// ResponseMessage builds the bytes signed for an authenticated response.
+// ResponseMessageFor builds the bytes signed for an authenticated response for the given format.
 // bodySHA256Hex is the hex SHA-256 of the exact body bytes (sha256("") when
 // the body is empty). Header values containing CR or LF are rejected.
-func ResponseMessage(nonce, path string, status int, bodySHA256Hex string, headers HeaderGetter) ([]byte, error) {
-	lines := make([]string, 0, 5+len(SignedHeaders))
+func ResponseMessageFor(format string, nonce, path string, status int, bodySHA256Hex string, headers HeaderGetter) ([]byte, error) {
+	signedHdrs := SignedHeadersV2
+	if format == ResponseFormatV1 {
+		signedHdrs = SignedHeadersV1
+	}
+	lines := make([]string, 0, 5+len(signedHdrs))
 	lines = append(lines,
-		ResponseFormat,
+		format,
 		"nonce="+nonce,
 		"path="+path,
 		"status="+strconv.Itoa(status),
 		"body-sha256="+bodySHA256Hex,
 	)
-	for _, name := range SignedHeaders {
+	for _, name := range signedHdrs {
 		v := ""
 		if headers != nil {
 			v = headers.Get(name)
@@ -386,6 +411,11 @@ func ResponseMessage(nonce, path string, status int, bodySHA256Hex string, heade
 		}
 	}
 	return joinLines(lines...), nil
+}
+
+// ResponseMessage builds the bytes signed for an authenticated response using the default v2 format.
+func ResponseMessage(nonce, path string, status int, bodySHA256Hex string, headers HeaderGetter) ([]byte, error) {
+	return ResponseMessageFor(ResponseFormatV2, nonce, path, status, bodySHA256Hex, headers)
 }
 
 // SignResponse returns the base64 X-Tracker-Auth value for a response.
@@ -404,15 +434,26 @@ func SignResponse(serverPriv ed25519.PrivateKey, nonce, path string, status int,
 }
 
 // VerifyResponse verifies an X-Tracker-Auth signature over a response.
+// It verifies against the modern v2 format first, and gracefully falls back to v1
+// for backward compatibility with older servers.
 func VerifyResponse(serverPub ed25519.PublicKey, nonce, path string, status int, bodySHA256Hex string, headers HeaderGetter, sigB64 string) error {
 	if !ValidNonce(nonce) {
 		return ErrNonce
 	}
-	msg, err := ResponseMessage(nonce, path, status, bodySHA256Hex, headers)
+	// Try v2 format first
+	msgV2, err := ResponseMessageFor(ResponseFormatV2, nonce, path, status, bodySHA256Hex, headers)
 	if err != nil {
 		return err
 	}
-	return verify(serverPub, msg, sigB64)
+	if err := verify(serverPub, msgV2, sigB64); err == nil {
+		return nil
+	}
+	// Fall back to v1 format for backward compatibility
+	msgV1, err := ResponseMessageFor(ResponseFormatV1, nonce, path, status, bodySHA256Hex, headers)
+	if err != nil {
+		return err
+	}
+	return verify(serverPub, msgV1, sigB64)
 }
 
 // ---------------------------------------------------------------------------
