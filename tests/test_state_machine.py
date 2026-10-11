@@ -625,13 +625,9 @@ class TestLoadAndStore(unittest.TestCase):
         self.path = os.path.join(self.dir, "schedule.json")
 
     def tearDown(self):
-        for name in os.listdir(self.dir):
-            p = os.path.join(self.dir, name)
-            if os.path.isdir(p):
-                os.rmdir(p)
-            else:
-                os.remove(p)
-        os.rmdir(self.dir)
+        import shutil
+
+        shutil.rmtree(self.dir, ignore_errors=True)
 
     def write(self, content, bump=0):
         mode = "wb" if isinstance(content, bytes) else "w"
@@ -710,6 +706,71 @@ class TestLoadAndStore(unittest.TestCase):
         self.assertEqual(store.path, self.path)
         store = sm.ConfigStore(env={}, log=lambda *_: None)
         self.assertEqual(store.path, sm.DEFAULT_CONFIG_PATH)
+
+    def test_store_set_and_clear_override(self):
+        store, _ = quiet_store(self.path)
+        self.assertEqual(store.get().force_phase, "")
+        self.assertFalse(store.get().force_fast_poll)
+
+        store.set_override(force_phase="overnight", force_fast_poll=True)
+        self.assertEqual(store.get().force_phase, "overnight")
+        self.assertTrue(store.get().force_fast_poll)
+
+        with self.assertRaisesRegex(sm.ConfigError, "unknown phase"):
+            store.set_override(force_phase="nonexistent_phase")
+
+        store.set_override(force_phase="auto")
+        self.assertEqual(store.get().force_phase, "")
+        self.assertTrue(store.get().force_fast_poll)
+
+        store.clear_override()
+        self.assertEqual(store.get().force_phase, "")
+        self.assertFalse(store.get().force_fast_poll)
+
+    def test_store_save_config_and_reset(self):
+        store, _ = quiet_store(self.path)
+        valid_doc = {
+            "version": 1,
+            "phases": {"offpeak": {"poll_interval": 450}},
+            "windows": [{"phase": "offpeak", "start": "00:00", "end": "24:00"}],
+        }
+        cfg, warnings = store.save_config(valid_doc)
+        self.assertEqual(cfg.phases["offpeak"].poll_interval, 450)
+        self.assertTrue(os.path.exists(self.path))
+        self.assertEqual(store.source, self.path)
+
+        with self.assertRaises(sm.ConfigError):
+            store.save_config({"phases": {"offpeak": {"poll_interval": 10}}})
+        self.assertEqual(store.get().phases["offpeak"].poll_interval, 450)
+
+        cfg, _ = store.reset_to_default()
+        self.assertEqual(cfg.phases["offpeak"].poll_interval, 600)
+
+    def test_store_save_fallback_on_os_error(self):
+        store, _ = quiet_store(self.path)
+        cache_fallback_dir = os.path.join(self.dir, "cache_fallback")
+        os.makedirs(cache_fallback_dir, exist_ok=True)
+        from unittest.mock import patch
+
+        orig_makedirs = os.makedirs
+
+        def fake_makedirs(path, exist_ok=True):
+            if "read_only" in path:
+                raise OSError("Read-only file system")
+            return orig_makedirs(path, exist_ok=exist_ok)
+
+        with patch("paths.resolve_cache_dir", return_value=cache_fallback_dir):
+            with patch("os.makedirs", side_effect=fake_makedirs):
+                cfg, _ = store.save_config(
+                    {"version": 1, "default_phase": "offpeak"},
+                    target_path=os.path.join(self.dir, "read_only", "schedule.json"),
+                )
+                self.assertTrue(
+                    os.path.exists(os.path.join(cache_fallback_dir, "schedule.json"))
+                )
+                self.assertEqual(
+                    store.path, os.path.join(cache_fallback_dir, "schedule.json")
+                )
 
 
 class TestExampleConfig(unittest.TestCase):

@@ -23,6 +23,7 @@ __all__ = [
     "STORE",
     "CommuteLighting",
     "_parse_hour_env",
+    "clear_schedule_override",
     "get_commute_lighting",
     "get_policy_header",
     "get_presentation",
@@ -32,6 +33,9 @@ __all__ = [
     "get_target_poll_interval",
     "is_overnight_hours",
     "is_peak_commute_hours",
+    "reset_schedule_config",
+    "save_schedule_config",
+    "set_schedule_override",
 ]
 
 
@@ -160,3 +164,27 @@ def get_schedule_report(
             "force_fast_poll": cfg.force_fast_poll,
         },
     }
+
+
+def set_schedule_override(
+    force_phase: Optional[str] = None, force_fast_poll: Optional[bool] = None
+) -> state_machine.ScheduleConfig:
+    """Sets a runtime override for phase or fast poll cadence."""
+    return STORE.set_override(force_phase=force_phase, force_fast_poll=force_fast_poll)
+
+
+def clear_schedule_override() -> state_machine.ScheduleConfig:
+    """Clears any active runtime schedule overrides."""
+    return STORE.clear_override()
+
+
+def save_schedule_config(
+    data: dict[str, Any], target_path: Optional[str] = None
+) -> tuple[state_machine.ScheduleConfig, list[str]]:
+    """Validates and persists a new schedule configuration."""
+    return STORE.save_config(data, target_path=target_path)
+
+
+def reset_schedule_config() -> tuple[state_machine.ScheduleConfig, list[str]]:
+    """Resets the schedule configuration to the built-in defaults."""
+    return STORE.reset_to_default()

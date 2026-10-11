@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.38.0] - 2026-10-10
+
+### Added
+
+- **Web Dashboard State Machine Schedule Management (`GET /`)**: Added an interactive Schedule Management section to the desktop webpage dashboard. Displays active phase, target cadence, commute lighting, schedule source, upcoming 24h transitions timeline, and an active window rules table.
+- **Quick Phase & Fast-Poll Override**: Introduced dashboard controls to temporarily override the active phase (`peak`, `offpeak`, `overnight`, etc.) or return to scheduled operation (`auto`), alongside a 60s fast-poll toggle, authenticated via `X-Tracker-Token`.
+- **In-Browser Schedule JSON Editor**: Integrated an editable, syntax-checked schedule configuration editor with server-side schema validation, save & apply, reload from server, and reset-to-defaults capabilities.
+- **Schedule Mutation API (`POST /schedule`)**: Added authenticated control endpoint for setting runtime overrides, clearing overrides, resetting to defaults, and atomically saving new schedule configurations.
+- **Resilient Config Persistence with Read-Only Fallback**: `ConfigStore.save_config` atomically persists schedule changes to `SCHEDULE_CONFIG`, with automatic fallback to `CACHE_DIR/schedule.json` when running in read-only container environments. Updated `docker-compose.yml` to mount `./config` read-write.
+
+---
+
 ## [1.37.1] - 2026-10-10
 
 ### Fixed

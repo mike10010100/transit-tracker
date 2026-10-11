@@ -94,6 +94,39 @@ class TestCommuteSchedule(unittest.TestCase):
                 server.get_commute_lighting(datetime(2026, 10, 8, 3, 0)), (0, 0)
             )
 
+    def test_schedule_management_facades(self):
+        import schedule
+
+        with (
+            patch.object(schedule.STORE, "set_override") as mock_set,
+            patch.object(schedule.STORE, "clear_override") as mock_clear,
+            patch.object(schedule.STORE, "save_config") as mock_save,
+            patch.object(schedule.STORE, "reset_to_default") as mock_reset,
+        ):
+            mock_set.return_value = "set_ok"
+            mock_clear.return_value = "clear_ok"
+            mock_save.return_value = ("save_ok", [])
+            mock_reset.return_value = ("reset_ok", [])
+
+            self.assertEqual(
+                schedule.set_schedule_override(
+                    force_phase="peak", force_fast_poll=True
+                ),
+                "set_ok",
+            )
+            mock_set.assert_called_once_with(force_phase="peak", force_fast_poll=True)
+
+            self.assertEqual(schedule.clear_schedule_override(), "clear_ok")
+            mock_clear.assert_called_once()
+
+            self.assertEqual(
+                schedule.save_schedule_config({"version": 1}), ("save_ok", [])
+            )
+            mock_save.assert_called_once_with({"version": 1}, target_path=None)
+
+            self.assertEqual(schedule.reset_schedule_config(), ("reset_ok", []))
+            mock_reset.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

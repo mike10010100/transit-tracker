@@ -65,8 +65,8 @@ services:
       # 55 MB feed isn't re-downloaded and re-parsed on every deploy. Also holds
       # the auto-generated control token.
       - tracker-cache:/app/cache
-      # Schedule state machine config (schedule.json), read-only.
-      - ./config:/app/config:ro
+      # Schedule state machine config (schedule.json).
+      - ./config:/app/config
     healthcheck:
       # $$ defers expansion to the container shell so a custom PORT is honoured.
       test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost:$${PORT:-8000}/healthz"]
