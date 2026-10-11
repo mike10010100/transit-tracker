@@ -146,6 +146,51 @@ func TestResolveClientID_FileRead(t *testing.T) {
 			t.Errorf("got %q, want fallback-uuid-3333", got)
 		}
 	})
+
+	t.Run("legacy unhidden file is read and migrated to hidden file", func(t *testing.T) {
+		writeCalled := false
+		var writtenPath string
+		var writtenData []byte
+		removeCalled := false
+		var removedPath string
+
+		origRemove := osRemove
+		osRemove = func(name string) error {
+			removeCalled = true
+			removedPath = name
+			return nil
+		}
+		defer func() { osRemove = origRemove }()
+
+		got := ResolveClientID(
+			func(prop, key string) string { return "" },
+			func(path string) ([]byte, error) {
+				if path == LegacyClientIDConfigFile {
+					return []byte("legacy-uuid-4444\n"), nil
+				}
+				return nil, os.ErrNotExist
+			},
+			func(path string, data []byte, perm os.FileMode) error {
+				writeCalled = true
+				writtenPath = path
+				writtenData = data
+				return nil
+			},
+		)
+
+		if got != "legacy-uuid-4444" {
+			t.Errorf("got %q, want legacy-uuid-4444", got)
+		}
+		if !writeCalled || writtenPath != ClientIDConfigFile {
+			t.Errorf("expected write to hidden file %q, got writeCalled=%v, writtenPath=%q", ClientIDConfigFile, writeCalled, writtenPath)
+		}
+		if string(writtenData) != "legacy-uuid-4444\n" {
+			t.Errorf("writtenData = %q, want legacy-uuid-4444\n", string(writtenData))
+		}
+		if !removeCalled || removedPath != LegacyClientIDConfigFile {
+			t.Errorf("expected remove of legacy file %q, got removeCalled=%v, removedPath=%q", LegacyClientIDConfigFile, removeCalled, removedPath)
+		}
+	})
 }
 
 func TestResolveClientID_GenerateAndWrite(t *testing.T) {

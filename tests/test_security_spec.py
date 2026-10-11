@@ -95,6 +95,67 @@ class TestVectorsAndCrypto(unittest.TestCase):
         )
         self.assertEqual(msg.decode("utf-8"), vec["message"])
 
+    def test_response_format_v1_and_v2_backward_compatibility(self):
+        from identity import (
+            RESP_FORMAT_V1,
+            RESP_FORMAT_V2,
+            SIGNED_HEADERS_V1,
+            SIGNED_HEADERS_V2,
+        )
+
+        self.assertEqual(len(SIGNED_HEADERS_V1), 12)
+        self.assertNotIn("x-tracker-policy", SIGNED_HEADERS_V1)
+        self.assertEqual(len(SIGNED_HEADERS_V2), 13)
+        self.assertIn("x-tracker-policy", SIGNED_HEADERS_V2)
+
+        nonce = "000102030405060708090a0b0c0d0e0f"
+        headers = {
+            "etag": '"abc"',
+            "x-kindle-poll-interval": "60",
+            "x-tracker-policy": "v=1;phase=peak",
+        }
+
+        # v1 message
+        msg_v1 = build_response_message(
+            nonce, "/dashboard.png", 200, b"PNG", headers, resp_format=RESP_FORMAT_V1
+        )
+        lines_v1 = msg_v1.decode("utf-8").split("\n")
+        self.assertEqual(lines_v1[0], "transit-tracker-resp-v1")
+        self.assertEqual(len(lines_v1), 5 + 12)  # 5 preamble + 12 headers
+        self.assertFalse(any(line.startswith("x-tracker-policy=") for line in lines_v1))
+
+        # v2 message
+        msg_v2 = build_response_message(
+            nonce, "/dashboard.png", 200, b"PNG", headers, resp_format=RESP_FORMAT_V2
+        )
+        lines_v2 = msg_v2.decode("utf-8").split("\n")
+        self.assertEqual(lines_v2[0], "transit-tracker-resp-v2")
+        self.assertEqual(len(lines_v2), 5 + 13)  # 5 preamble + 13 headers
+        self.assertIn("x-tracker-policy=v=1;phase=peak", lines_v2)
+
+    def test_server_resolves_v1_format_for_legacy_clients(self):
+        h = DashboardHandler.__new__(DashboardHandler)
+        h.headers = {"X-Tracker-Client-Version": "1.35.10"}
+        self.assertEqual(h._resolve_resp_format(), "transit-tracker-resp-v1")
+
+        h.headers = {"X-Tracker-Client-Version": "1.35.0"}
+        self.assertEqual(h._resolve_resp_format(), "transit-tracker-resp-v1")
+
+        h.headers = {"X-Tracker-Client-Version": "1.36.0"}
+        self.assertEqual(h._resolve_resp_format(), "transit-tracker-resp-v2")
+
+        h.headers = {"X-Tracker-Client-Version": "1.37.0"}
+        self.assertEqual(h._resolve_resp_format(), "transit-tracker-resp-v2")
+
+        h.headers = {"X-Tracker-Resp-Format": "transit-tracker-resp-v1"}
+        self.assertEqual(h._resolve_resp_format(), "transit-tracker-resp-v1")
+
+        h.headers = {"X-Tracker-Resp-Format": "transit-tracker-resp-v2"}
+        self.assertEqual(h._resolve_resp_format(), "transit-tracker-resp-v2")
+
+        h.headers = {}
+        self.assertEqual(h._resolve_resp_format(), "transit-tracker-resp-v2")
+
     def test_response_signature_against_vectors(self):
         vec_resp = self.vectors["response"]
         server_seed = bytes.fromhex(self.vectors["server_seed_hex"])

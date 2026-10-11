@@ -43,7 +43,9 @@ except ImportError:  # pragma: no cover - exercised only when the dep is missing
 KEY_NAME = "server_identity.key"
 CERT_NAME = "server_identity.cert.json"
 CERT_FORMAT = "transit-tracker-server-v1"
-RESP_FORMAT = "transit-tracker-resp-v2"
+RESP_FORMAT_V1 = "transit-tracker-resp-v1"
+RESP_FORMAT_V2 = "transit-tracker-resp-v2"
+RESP_FORMAT = RESP_FORMAT_V2
 
 NONCE_HEADER = "X-Tracker-Nonce"
 CERT_HEADER = "X-Tracker-Cert"
@@ -51,8 +53,8 @@ AUTH_HEADER = "X-Tracker-Auth"
 
 _NONCE_RE = re.compile(r"\A[0-9a-f]{32}\Z")
 
-# Signed headers, in the exact order mandated by the spec (§3).
-SIGNED_HEADERS = (
+# Signed headers for v1 (legacy clients, e.g. v1.35.x)
+SIGNED_HEADERS_V1 = (
     "etag",
     "x-kindle-poll-interval",
     "x-tracker-presentation",
@@ -65,8 +67,12 @@ SIGNED_HEADERS = (
     "x-tracker-sha256",
     "x-resolved-view",
     "x-tracker-view",
-    "x-tracker-policy",
 )
+
+# Signed headers for v2 (mandated by spec §3 with policy header)
+SIGNED_HEADERS_V2 = SIGNED_HEADERS_V1 + ("x-tracker-policy",)
+
+SIGNED_HEADERS = SIGNED_HEADERS_V2
 
 
 class IdentityError(Exception):
@@ -94,6 +100,7 @@ def build_response_message(
     status: int,
     body: bytes,
     headers: Mapping[str, str],
+    resp_format: str = RESP_FORMAT_V2,
 ) -> bytes:
     """
     Builds the §3 response message: fixed preamble lines, then one
@@ -107,14 +114,18 @@ def build_response_message(
         if any("\r" in s or "\n" in s for s in (name, value)):
             raise IdentityError(f"CR or LF in header {name}")
         lower[name.lower()] = value
+    signed_hdrs = (
+        SIGNED_HEADERS_V1 if resp_format == RESP_FORMAT_V1 else SIGNED_HEADERS_V2
+    )
+    fmt_str = RESP_FORMAT_V1 if resp_format == RESP_FORMAT_V1 else RESP_FORMAT_V2
     lines = [
-        RESP_FORMAT,
+        fmt_str,
         f"nonce={nonce}",
         f"path={path}",
         f"status={int(status)}",
         f"body-sha256={hashlib.sha256(body).hexdigest()}",
     ]
-    for name in SIGNED_HEADERS:
+    for name in signed_hdrs:
         lines.append(f"{name}={lower.get(name, '')}")
     return "\n".join(lines).encode("utf-8")
 
@@ -190,9 +201,12 @@ class ServerIdentity:
         status: int,
         body: bytes,
         headers: Mapping[str, str],
+        resp_format: str = RESP_FORMAT_V2,
     ) -> list[tuple[str, str]]:
         """Returns the X-Tracker-Cert / X-Tracker-Auth headers for a response."""
-        msg = build_response_message(nonce, path, status, body, headers)
+        msg = build_response_message(
+            nonce, path, status, body, headers, resp_format=resp_format
+        )
         return [(CERT_HEADER, self.cert_header), (AUTH_HEADER, self.sign(msg))]
 
 

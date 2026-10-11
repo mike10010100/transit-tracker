@@ -11,8 +11,12 @@ import (
 )
 
 const (
-	// ClientIDConfigFile is the persistent path on Kindle storage for non-hardware serial client ID.
-	ClientIDConfigFile = "/mnt/us/documents/tracker_client_id.txt"
+	// ClientIDConfigFile is the persistent hidden path on Kindle storage for non-hardware serial client ID.
+	ClientIDConfigFile = "/mnt/us/documents/.tracker_client_id.txt"
+	// LegacyClientIDConfigFile is the legacy unhidden path from earlier releases.
+	LegacyClientIDConfigFile = "/mnt/us/documents/tracker_client_id.txt"
+	// SystemClientIDConfigFile is the persistent path in Kindle system folder.
+	SystemClientIDConfigFile = "/mnt/us/system/tracker_client_id.txt"
 	// FallbackClientIDConfigFile is the temporary path fallback for host development or testing.
 	FallbackClientIDConfigFile = "/tmp/tracker_client_id.txt"
 )
@@ -38,8 +42,8 @@ func generateUUID() string {
 // ResolveClientID determines the unique client identifier using a prioritized strategy:
 //  1. Checks hardware serial via lipcGetter("com.lab126.system", "serialNumber").
 //     If non-empty, returns the trimmed serial.
-//  2. Checks ClientIDConfigFile, then FallbackClientIDConfigFile.
-//     If non-empty, returns the trimmed stored string.
+//  2. Checks ClientIDConfigFile, LegacyClientIDConfigFile (migrating it), SystemClientIDConfigFile,
+//     then FallbackClientIDConfigFile. If non-empty, returns the trimmed stored string.
 //  3. Generates an RFC 4122 v4 UUID using crypto/rand and fmt.Sprintf.
 //  4. Persists the UUID to ClientIDConfigFile (0644). If that fails (e.g. non-Kindle path),
 //     persists to FallbackClientIDConfigFile.
@@ -58,9 +62,14 @@ func ResolveClientID(
 
 	// 2. Try reading existing persistent ID files
 	if readFile != nil {
-		for _, p := range []string{ClientIDConfigFile, FallbackClientIDConfigFile} {
+		for _, p := range []string{ClientIDConfigFile, LegacyClientIDConfigFile, SystemClientIDConfigFile, FallbackClientIDConfigFile} {
 			if data, err := readFile(p); err == nil {
 				if id := strings.TrimSpace(string(data)); id != "" {
+					if p == LegacyClientIDConfigFile && writeFile != nil {
+						_ = osMkdirAll(filepath.Dir(ClientIDConfigFile), 0755)
+						_ = writeFile(ClientIDConfigFile, []byte(id+"\n"), 0644)
+						_ = osRemove(LegacyClientIDConfigFile)
+					}
 					return id
 				}
 			}
