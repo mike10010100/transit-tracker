@@ -12,18 +12,24 @@ flowchart TD
         NJT_DV["NJ Transit DepartureVision (BUSDV2 API)"]
         NJT_GQL["NJ Transit GraphQL Public Fallback"]
         GBFS["Citi Bike GBFS Live Feed"]
+        METEO["Open-Meteo Weather API"]
+        HTTP_SRC["External JSON / Home Assistant"]
     end
 
     subgraph Server["Host Server (server/)"]
         direction TB
-        Ingest["Telemetry Ingestion\n(bus_tracker.py, citibike.py, gtfs_bus.py)"]
-        Layout["Canvas Rendering Engine\n(canvas.py, morning_view.py, evening_view.py)"]
+        Ingest["Telemetry Ingestion\n(bus_tracker.py, citibike.py, gtfs_bus.py, weather.py)"]
+        DataSources["Data Sources Engine\n(data_sources.py)"]
+        DashRegistry["Dashboard DSL & Registry\n(dashboard_dsl.py, dashboards.py)"]
+        Layout["Canvas Rendering Engine\n(canvas.py, render_dashboard.py)"]
         ScheduleEngine["Schedule & Lighting Governor\n(state_machine.py, schedule.py)"]
         FleetReg["Device Registry & State Store\n(device_registry.py)"]
         HttpServer["HTTP / Telemetry / OTA Server\n(server.py on Port 8000)"]
         DiscoveryResp["Discovery Responder\n(discovery.py on Port 8001 / mDNS)"]
 
-        Ingest --> Layout
+        Ingest --> DataSources
+        DataSources --> DashRegistry
+        DashRegistry --> Layout
         ScheduleEngine --> HttpServer
         FleetReg --> HttpServer
         Layout --> HttpServer
@@ -75,6 +81,7 @@ The server runs on standard Linux/macOS hosts, home servers, or Raspberry Pis us
 - **Secondary Fallback**: If BUSDV2 encounters network timeouts, schema changes, or HTTP errors, the tracker automatically falls back to NJ Transit's public GraphQL endpoint without interrupting the client.
 - **GTFS Bus Tracker**: `GTFSBusTracker` (`server/gtfs_bus.py`) indexes static GTFS timetables with GTFS-RT protocol buffers to compute ETA predictions even when primary feeds are impaired.
 - **Citi Bike Telemetry**: `CitiBikeTracker` (`server/citibike.py`) consumes public GBFS JSON feeds for live station availability and prioritizes e-bikes and open docks across 6 key neighborhood hubs.
+- **Meteorology Telemetry**: `WeatherTracker` (`server/weather.py`) fetches real-time temperature, conditions, humidity, precipitation probability, and daily forecasts from Open-Meteo (zero API keys required) with TTL caching and fallback mock snapshots.
 
 ### 2.2 Dynamic Layout & Resolution Engine
 - **Resolution-Native Rendering**: The server renders images at the client's native panel resolution (e.g. 1648×1236 for Kindle Paperwhite 5) rather than upscaling an 800px bitmap. Text and vector glyphs are rendered with subpixel font metrics directly to the target canvas.
@@ -84,7 +91,30 @@ The server runs on standard Linux/macOS hosts, home servers, or Raspberry Pis us
   - `auto`: Automatically selects the optimal view based on current local time.
 - **`ScaledDraw` Proxy**: Located in `server/canvas.py`, wraps Pillow's `ImageDraw` to scale coordinates, bounding boxes, and font sizes linearly according to the requested display scale.
 
-### 2.3 Schedule State Machine (`server/state_machine.py`, `server/schedule.py`)
+### 2.3 Modular Dashboard Architecture & Layout DSL (`server/dashboard_dsl.py`, `server/dashboards.py`, `server/data_sources.py`)
+- **Declarative Layout Engine**: Provides flexbox-inspired vertical (`VStack`), horizontal (`HStack`), and styled container (`Box`) primitives with recursive coordinate computation and bounded canvas rendering.
+- **Universal & Transit Component Library**:
+  - `HeaderWidget`: Status badges, title, subtitle, clock, date, and live battery indicator.
+  - `MetricCardWidget`: Highlighted single-metric cards with large bold numbers, units, and sub-labels.
+  - `EntityListWidget`: Multi-row tabular status lists for transit stations, sensor entities, or bus routes.
+  - `TextNoticeWidget`: Framed announcement, advisory, or sleep notice banners.
+  - `ButtonBarWidget`: Interactive bottom button bars displaying active and available views.
+  - `WeatherHeroWidget` & `WeatherForecastWidget`: Current weather conditions, highs/lows, precipitation, and multi-day forecast strip.
+  - `BusHeroWidget` & `BusBarWidget`: Route 126 arrival countdown and compact departure bars.
+  - `CitiBikeHeroWidget` & `CitiBikeBarWidget`: Citi Bike dock/e-bike availability cards and bars.
+- **Pluggable Data Source Engine**:
+  - `SystemDataSource`: Clock, battery percentage, charging state.
+  - `NJTransitDataSource`: Live bus arrivals across designated stops.
+  - `CitiBikeDataSource`: Dock and bike availability across neighborhood stations.
+  - `WeatherDataSource`: Local conditions and multi-day forecasts.
+  - `StaticDataSource`: Fixed key-value metrics.
+  - `HttpJsonDataSource`: Queries arbitrary external JSON endpoints (e.g. Home Assistant, IoT sensors, webhook relays) with `${ENV_VAR}` header expansion, TTL caching, and JSONPath extraction (`path="attributes.temperature"`).
+- **Dashboard Registry & Hot-Reloading**:
+  - Built-in presets: `morning`, `evening`, `weather`, `bus_focus`, `citibike_focus`.
+  - User-configurable layouts stored in `config/dashboards/<id>.json`.
+  - Hot-reloaded on disk modification without daemon restarts.
+
+### 2.4 Schedule State Machine (`server/state_machine.py`, `server/schedule.py`)
 
 The schedule is a configurable two-layer state machine. The server owns **layer 1**, the time-driven *phase*. The client owns **layer 2**, the event-driven *interaction overlay* (`idle` $\rightarrow$ `session` $\rightarrow$ `hold`). Its timeouts are configured on the server and shipped in the signed `X-Tracker-Policy` header.
 
@@ -107,8 +137,11 @@ Each phase sets everything required to drive presentation and power management:
 | `lighting` | Frontlight `brightness` / `warmth` (0–24) | 8 / 12 | 0 / 0 | 0 / 0 |
 | `realtime` | Allow GTFS-RT / live feeds (else static schedule only) | ✓ | ✓ | ✗ |
 | `suspend` | Client may deep-suspend to RAM between polls | ✗ | ✓ | ✓ |
+| `view` | Default view for this phase (`morning`, `evening`, `weather`, etc.) | `morning` | `evening` | `weather` |
+| `views` | Tuple of view IDs available for manual touch cycling | – | – | `weather`, `evening` |
+| `interaction_view`| View mode to display when woken by power button or touch | `morning` | `evening` | `morning` |
 
-**Windows** select the active phase. They are evaluated **in order and the first match wins**. `days` defaults to every day. A window with `start > end` wraps past midnight and belongs to the day it *starts* on. Outside every window, `default_phase` applies. A window may also set `view` (`morning` / `evening`), which an `auto` view request then uses.
+**Windows** select the active phase. They are evaluated **in order and the first match wins**. `days` defaults to every day. A window with `start > end` wraps past midnight and belongs to the day it *starts* on. Outside every window, `default_phase` applies. A window may also set `view` or `views`, which client polling and touch cycles then use.
 
 **Web Dashboard & Schedule Management**:
 - The web UI at `GET /` includes an interactive schedule editor with live phase status, remaining countdown to next transition, and a 24-hour timeline.
@@ -117,12 +150,12 @@ Each phase sets everything required to drive presentation and power management:
 - Hot-reloading: `schedule.json` is re-read automatically when its mtime changes.
 
 **Signed Policy Header**:
-Clients receive phase directives and overlay timeouts in the signed `X-Tracker-Policy` response header:
+Clients receive phase directives, overlay timeouts, and view mode lists in the signed `X-Tracker-Policy` response header:
 ```http
-X-Tracker-Policy: v=1;phase=peak;until=1760103000;suspend=0;session=90;fast=600;hold=2700;sl=8,12
+X-Tracker-Policy: v=1;phase=peak;until=1760103000;suspend=0;session=90;fast=600;hold=2700;sl=8,12;views=weather,morning,evening
 ```
 
-### 2.4 Multi-Device Fleet Registry (`server/device_registry.py`)
+### 2.5 Multi-Device Fleet Registry (`server/device_registry.py`)
 - **Auto-Registration**: Any incoming request containing `X-Tracker-Client-ID` is automatically registered without prior manual provisioning.
 - **Isolated Per-Device State**:
   - Telemetry: IP address, battery percentage, charging state, client version, firmware version, and last-seen timestamp.

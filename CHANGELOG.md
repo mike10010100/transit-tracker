@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.39.0] - 2026-10-11
+
+### Added
+
+- **Modular Dashboard Architecture & Declarative Layout DSL** (`server/dashboard_dsl.py`, `server/dashboards.py`): Built a flexbox-inspired declarative layout engine (`VStack`, `HStack`, `Box`, `WidgetNode`) supporting universal widgets (`HeaderWidget`, `MetricCardWidget`, `EntityListWidget`, `TextNoticeWidget`, `ButtonBarWidget`) and specialized transit/weather widgets (`BusHeroWidget`, `BusBarWidget`, `CitiBikeHeroWidget`, `CitiBikeBarWidget`, `WeatherHeroWidget`, `WeatherForecastWidget`).
+- **Open-Meteo Weather Telemetry Engine** (`server/weather.py`): Integrated Open-Meteo public API telemetry for Hoboken, NJ (zero API keys required) providing live temperature, "feels like", conditions, WMO weather interpretation codes, humidity, precipitation probability, and 4-day daily forecasts with TTL caching and resilient offline fallback.
+- **Pluggable Data Sources Engine** (`server/data_sources.py`): Unified data abstraction across `SystemDataSource`, `NJTransitDataSource`, `CitiBikeDataSource`, `WeatherDataSource`, `StaticDataSource`, and `HttpJsonDataSource` (enabling arbitrary external REST/JSON endpoints such as Home Assistant, IoT sensors, and webhooks with `${ENV_VAR}` expansion and JSONPath/dot-path extraction).
+- **Dashboard REST & Streaming Endpoints** (`server/server.py`):
+  - `GET /dashboards`: Lists all registered built-in and user-defined dashboards.
+  - `GET /dashboards/<id>`: Returns specification JSON for a dashboard.
+  - `GET /dashboards/<id>.png`: Directly renders and streams PNG image for any dashboard with Kindle PW5 rotation, high-DPI scaling, and conditional ETag 304 caching.
+  - `GET /dashboards/<id>/data`: Returns live or mock telemetry JSON payload for a dashboard view.
+  - `POST /dashboards/<id>`: Authenticated control endpoint (`X-Tracker-Token`) to dynamically create and persist custom dashboard layouts in `config/dashboards/<id>.json`.
+- **Pre-Configured Modular Presets** (`config/dashboards/`): Included out-of-the-box specifications for `weather.json` (Hoboken weather hero and multi-day forecast), `bus_focus.json` (Route 126 departures with stop status), and `citibike_focus.json` (Citi Bike neighborhood docks).
+- **Multi-View Schedule State Machine Integration** (`server/state_machine.py`, `server/schedule.py`): Extended schedule phases and windows to support `view`, `views` (tuple of allowed view modes for sequential touch cycling), and `interaction_view` (view displayed on power button wake or screen touch). Shipped in `X-Tracker-Policy` via `views=...`.
+- **Kindle Touch Multi-View Cycling** (`client-go/main.go`, `client-go/interaction.go`): Kindle client strictly parses `views=` in `X-Tracker-Policy` and cycles sequentially through all assigned views on touch interaction, with seamless 2-way fallback to `morning`/`evening` when unconfigured.
+
+### Changed
+
+- **Web Dashboard View Switcher** (`server/server.py`): Dynamically lists all registered dashboard views in the web UI header instead of hardcoded 3 links, enabling direct preview of weather, transit focus, and custom user views.
+
+---
+
 ## [1.38.1] - 2026-10-10
 
 ### Documentation

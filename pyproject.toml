@@ -59,6 +59,9 @@ also_copy = [
     "server/bus_tracker.py",
     "server/canvas.py",
     "server/citibike.py",
+    "server/dashboards.py",
+    "server/dashboard_dsl.py",
+    "server/data_sources.py",
     "server/device_registry.py",
     "server/discovery.py",
     "server/evening_view.py",
@@ -73,6 +76,8 @@ also_copy = [
     "server/server.py",
     "server/state_machine.py",
     "server/version.py",
+    "server/weather.py",
+    "config/dashboards/",
     "client-go/",
 ]
 

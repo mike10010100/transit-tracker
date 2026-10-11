@@ -84,6 +84,15 @@ func TestParsePolicy_Valid(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:   "policy with views list",
+			header: "v=1;phase=morning;views=weather,morning,evening",
+			check: func(t *testing.T, p Policy) {
+				if len(p.Views) != 3 || p.Views[0] != "weather" || p.Views[1] != "morning" || p.Views[2] != "evening" {
+					t.Errorf("unexpected Views: %v", p.Views)
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -95,6 +104,21 @@ func TestParsePolicy_Valid(t *testing.T) {
 			tc.check(t, p)
 		})
 	}
+}
+
+func equalPolicy(a, b Policy) bool {
+	if a.Phase != b.Phase || !a.Until.Equal(b.Until) || a.Suspend != b.Suspend ||
+		a.Session != b.Session || a.FastHold != b.FastHold || a.Hold != b.Hold ||
+		a.SessionBrightness != b.SessionBrightness || a.SessionWarmth != b.SessionWarmth ||
+		len(a.Views) != len(b.Views) {
+		return false
+	}
+	for i := range a.Views {
+		if a.Views[i] != b.Views[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestParsePolicy_Invalid(t *testing.T) {
@@ -121,6 +145,8 @@ func TestParsePolicy_Invalid(t *testing.T) {
 		{"nonsense until epoch", "v=1;until=999999999999999999"},
 		{"part without equals", "v=1;phase;suspend=0"},
 		{"empty key", "v=1;=peak"},
+		{"invalid empty views", "v=1;views="},
+		{"invalid views bad char", "v=1;views=weather,bad view"},
 		{"exceeds max length", "v=1;phase=" + strings.Repeat("a", 300)},
 		{"too many parts", "v=1;" + strings.Repeat("p=1;", 20)},
 	}
@@ -132,7 +158,7 @@ func TestParsePolicy_Invalid(t *testing.T) {
 				t.Errorf("parsePolicy(%q) returned ok=true, want false", tc.header)
 			}
 			def := defaultPolicy()
-			if p != def {
+			if !equalPolicy(p, def) {
 				t.Errorf("expected default policy on rejection, got %+v", p)
 			}
 		})

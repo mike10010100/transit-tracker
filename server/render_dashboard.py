@@ -24,9 +24,12 @@ from canvas import (
     parse_minutes,
 )
 from citibike import CitiBikeTracker
+from dashboard_dsl import RenderContext
+from dashboards import REGISTRY
 from evening_view import render_evening_view
 from morning_view import render_morning_view
 from PIL import Image, ImageDraw, ImageFont
+from weather import WeatherTracker, get_mock_weather_data
 
 __all__ = [
     "HEIGHT",
@@ -56,9 +59,10 @@ __all__ = [
 
 def resolve_view(view: str = "auto", hour: Optional[int] = None) -> str:
     """
-    Resolves view mode ('morning' or 'evening').
+    Resolves view mode across built-in presets and registered modular dashboards.
     - 'morning': Citi Bike Hero view (AM commute, 5:00 AM - 12:00 PM).
     - 'evening': Bus Hero view (PM commute / evening / night, 12:00 PM - 5:00 AM).
+    - Any registered dashboard ID (e.g. 'weather', 'bus_focus', 'citibike_focus').
     - 'auto': Automatically switches based on current local hour.
     """
     v = (view or "auto").lower().strip()
@@ -66,6 +70,13 @@ def resolve_view(view: str = "auto", hour: Optional[int] = None) -> str:
         return "morning"
     if v in ("evening", "bus", "pm", "afternoon", "night"):
         return "evening"
+
+    # Check registered modular dashboards
+    try:
+        if REGISTRY.get(v) is not None:
+            return v
+    except Exception:
+        pass
 
     if hour is None:
         hour = datetime.now().hour
@@ -88,24 +99,14 @@ def render_dashboard(
     scale: float = 1.0,
     presentation: str = "interactive",
     status_note: str = "",
+    available_views: Optional[list[str]] = None,
+    weather_data: Any = None,
+    custom_data: Optional[dict[str, Any]] = None,
 ) -> str:
     """
     Renders a high-contrast black-and-white image optimized for e-ink
     or low-power dashboard screens (default 800x480, or 800x600 for 4:3 displays).
-    Supports 'morning' (Citi Bike Hero) and 'evening' (Bus Hero) view modes.
-
-    presentation:
-      - "interactive": a live, tappable dashboard (buttons drawn).
-      - anything else ("idle"/"dormant"): replaces the button bar with an inert
-        status strip, so the panel never shows buttons that aren't tappable.
-
-    stop_status maps stop id -> fetch status ('ok'/'empty'/'error') so that an
-    upstream outage can be distinguished from a genuine absence of buses.
-
-    width/height are the *logical* design-space dimensions that drive layout.
-    `scale` maps that design space onto a larger native canvas: the output image
-    is (width*scale) x (height*scale) and all drawing is done natively at that
-    resolution (fonts are reconstructed at scale), so no bitmap upscaling occurs.
+    Supports built-in views and arbitrary modular dashboards.
     """
     if citibike_data is None:
         try:
@@ -138,7 +139,7 @@ def render_dashboard(
             width=width,
             height=height,
         )
-    else:
+    elif active_view == "evening":
         render_evening_view(
             draw,
             stops_data,
@@ -151,6 +152,49 @@ def render_dashboard(
             width=width,
             height=height,
         )
+    else:
+        # Modular dashboard rendering via REGISTRY
+        if weather_data is None:
+            try:
+                weather_data = (
+                    get_mock_weather_data()
+                    if is_mock
+                    else WeatherTracker().get_weather()
+                )
+            except Exception:
+                weather_data = get_mock_weather_data() if is_mock else None
+
+        ctx = RenderContext(
+            now=now,
+            stops_data=stops_data,
+            stop_status=stop_status or {},
+            citibike_data=citibike_data or [],
+            weather_data=weather_data,
+            custom_data=custom_data or {},
+            batt_level=batt_level,
+            is_charging=is_charging,
+            presentation=presentation,
+            status_note=status_note,
+            active_view=active_view,
+            available_views=available_views or [],
+            is_mock=is_mock,
+            width=width,
+            height=height,
+        )
+        handled = REGISTRY.render(active_view, draw, ctx)
+        if not handled:
+            render_evening_view(
+                draw,
+                stops_data,
+                citibike_data,
+                now,
+                batt_level=batt_level,
+                is_charging=is_charging,
+                is_mock=is_mock,
+                stop_status=stop_status,
+                width=width,
+                height=height,
+            )
 
     # Not interactive (idle-while-suspended or overnight): erase the button bar
     # and show a status strip so the panel does not masquerade as tappable.

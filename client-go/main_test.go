@@ -706,6 +706,32 @@ func TestMiscMissingBranches(t *testing.T) {
 	}
 }
 
+func TestCycleViewMode_ModularViews(t *testing.T) {
+	tc := NewTrackerClient("http://127.0.0.1:8000", "auto")
+	tc.applyResponsePolicy("v=1;phase=morning;views=weather,morning,evening", 60)
+
+	tc.lastRenderedView = "evening"
+	view := tc.cycleViewMode()
+	if view != "weather" {
+		t.Errorf("expected weather view, got %s", view)
+	}
+
+	view = tc.cycleViewMode()
+	if view != "morning" {
+		t.Errorf("expected morning view, got %s", view)
+	}
+
+	view = tc.cycleViewMode()
+	if view != "evening" {
+		t.Errorf("expected evening view, got %s", view)
+	}
+
+	view = tc.cycleViewMode()
+	if view != "weather" {
+		t.Errorf("expected weather view on wrap around, got %s", view)
+	}
+}
+
 func TestGetServerURL_InvokesAutoDiscover(t *testing.T) {
 	patchRuntime(t)
 	called := false

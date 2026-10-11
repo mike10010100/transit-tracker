@@ -31,7 +31,10 @@ const (
 	maxPolicyEpoch = 32503680000 // 3000-01-01: anything later is nonsense
 )
 
-var policyPhaseRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,23}$`)
+var (
+	policyPhaseRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,23}$`)
+	policyViewRe  = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
+)
 
 // Phase-boundary clamping (see boundaryDelay).
 const (
@@ -63,6 +66,8 @@ type Policy struct {
 	// SessionBrightness and SessionWarmth light a dark panel for a session.
 	SessionBrightness int
 	SessionWarmth     int
+	// Views lists the dashboard views assigned to the active phase.
+	Views []string
 }
 
 // defaultPolicy reproduces the pre-state-machine constants. It applies until
@@ -167,6 +172,23 @@ func (p *Policy) setField(key, val string) bool {
 			p.SessionBrightness = int(clampInt(bn, 0, 24))
 			p.SessionWarmth = int(clampInt(wn, 0, 24))
 		}
+	case "views":
+		if val == "" {
+			ok = false
+		} else {
+			rawViews := strings.Split(val, ",")
+			views := make([]string, 0, len(rawViews))
+			for _, v := range rawViews {
+				v = strings.TrimSpace(v)
+				if v != "" && policyViewRe.MatchString(v) {
+					views = append(views, v)
+				} else {
+					return false
+				}
+			}
+			p.Views = views
+			ok = len(views) > 0
+		}
 	default:
 		ok = true
 	}
@@ -216,8 +238,12 @@ func (p Policy) String() string {
 	if phase == "" {
 		phase = "(none)"
 	}
-	return fmt.Sprintf("phase=%s until=%s suspend=%v session=%s fast=%s hold=%s",
-		phase, until, p.Suspend, p.Session, p.FastHold, p.Hold)
+	viewsStr := ""
+	if len(p.Views) > 0 {
+		viewsStr = " views=" + strings.Join(p.Views, ",")
+	}
+	return fmt.Sprintf("phase=%s until=%s suspend=%v session=%s fast=%s hold=%s%s",
+		phase, until, p.Suspend, p.Session, p.FastHold, p.Hold, viewsStr)
 }
 
 // InteractionState is the interaction overlay's state.
