@@ -783,5 +783,73 @@ class TestExampleConfig(unittest.TestCase):
         self.assertEqual(sm.parse_config(doc), sm.default_config())
 
 
+class TestModularStateViews(unittest.TestCase):
+    def test_phase_default_views_and_interactive_resolution(self):
+        doc = {
+            "version": 1,
+            "default_phase": "overnight",
+            "phases": {
+                "overnight": {
+                    "presentation": "dormant",
+                    "view": "weather",
+                    "interaction_view": "morning",
+                    "views": ["weather", "morning"],
+                },
+                "peak": {
+                    "presentation": "interactive",
+                    "view": "bus_focus",
+                    "views": ["bus_focus", "citibike_focus"],
+                },
+            },
+            "windows": [
+                {
+                    "phase": "peak",
+                    "start": "08:00",
+                    "end": "10:00",
+                    "views": ["bus_focus", "weather"],
+                }
+            ],
+        }
+        cfg = sm.parse_config(doc)
+        p_overnight = cfg.phases["overnight"]
+        self.assertEqual(p_overnight.view, "weather")
+        self.assertEqual(p_overnight.interaction_view, "morning")
+        self.assertEqual(p_overnight.views, ("weather", "morning"))
+
+        # Test dormant state resolution (midnight outside window)
+        dt_night = datetime(2026, 10, 11, 23, 0)
+        state_dormant = sm.resolve(cfg, dt_night, interactive=False)
+        self.assertEqual(state_dormant.phase, "overnight")
+        self.assertEqual(state_dormant.presentation, "dormant")
+        self.assertEqual(state_dormant.view, "weather")
+        self.assertEqual(state_dormant.views, ("weather", "morning"))
+        self.assertEqual(state_dormant.interaction_view, "morning")
+
+        # Test power-button interactive wake resolution
+        state_wake = sm.resolve(cfg, dt_night, interactive=True)
+        self.assertEqual(state_wake.view, "morning")
+        self.assertEqual(state_wake.views, ("weather", "morning"))
+
+        # Test window resolution with views list
+        dt_peak = datetime(2026, 10, 11, 8, 30)
+        state_peak = sm.resolve(cfg, dt_peak)
+        self.assertEqual(state_peak.phase, "peak")
+        self.assertEqual(state_peak.view, "bus_focus")
+        self.assertEqual(state_peak.views, ("bus_focus", "weather"))
+
+        # Policy header includes views=
+        policy_hdr = sm.format_policy_header(state_peak, cfg)
+        self.assertIn("views=bus_focus,weather", policy_hdr)
+
+    def test_rejection_of_invalid_views(self):
+        bad_doc = {"phases": {"peak": {"view": "illegal view! with spaces"}}}
+        with self.assertRaises(sm.ConfigError):
+            sm.parse_config(bad_doc)
+
+        bad_doc2 = {"phases": {"peak": {"views": ["not_a_valid_view_name_xyz"]}}}
+        with self.assertRaises(sm.ConfigError):
+            sm.parse_config(bad_doc2)
+
+
 if __name__ == "__main__":
     unittest.main()

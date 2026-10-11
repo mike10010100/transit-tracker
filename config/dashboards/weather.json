@@ -1,0 +1,49 @@
+{
+  "id": "weather",
+  "title": "Hoboken Weather & Forecast",
+  "description": "Current conditions, temperature hero, and upcoming 4-day forecast",
+  "version": 1,
+  "layout": {
+    "type": "vstack",
+    "children": [
+      {
+        "type": "header",
+        "badge": "WEATHER",
+        "title": "HOBOKEN LOCAL FORECAST",
+        "subtitle": "MILE SQUARE METEOROLOGY & CONDITIONS",
+        "show_time": true,
+        "show_battery": true,
+        "show_date": true
+      },
+      {
+        "type": "hstack",
+        "flex": 2.2,
+        "gap": 10,
+        "children": [
+          {
+            "type": "weather_hero",
+            "flex": 2.2,
+            "show_details": true
+          },
+          {
+            "type": "metric_card",
+            "flex": 1.0,
+            "title": "PRECIPITATION",
+            "source": "precip_prob",
+            "unit": "%",
+            "subtitle": "Rain probability",
+            "badge": "RADAR"
+          }
+        ]
+      },
+      {
+        "type": "weather_forecast",
+        "height": 115,
+        "days": 4
+      },
+      {
+        "type": "button_bar"
+      }
+    ]
+  }
+}

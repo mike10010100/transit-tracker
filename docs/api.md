@@ -13,7 +13,7 @@ Renders and delivers the transit dashboard PNG image tailored to the requesting 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `kindle` | `string` | `"standard"` | Target profile (`pw5` or `standard`). `pw5` sets landscape native resolution (1648×1236). |
-| `view` | `string` | `"auto"` | View selection: `auto`, `morning` (Citi Bike), or `evening` (NJ Transit Bus). |
+| `view` | `string` | `"auto"` | View selection: `auto`, built-ins (`morning`, `evening`, `weather`, `bus_focus`, `citibike_focus`), or any custom registered dashboard ID. |
 | `rotate` | `int` | `0` | Image rotation in degrees: `0`, `90`, `180`, `270`. |
 | `scale` | `float` | `1.0` | High-DPI render scaling factor. |
 | `mock` | `int` | `0` | If `1`, renders synthetic mock departures for testing. |
@@ -38,7 +38,7 @@ Renders and delivers the transit dashboard PNG image tailored to the requesting 
 | `X-Kindle-Brightness` | Recommended frontlight brightness (`0` to `24`). |
 | `X-Kindle-Warmth` | Recommended frontlight color warmth (`0` to `24`). |
 | `X-Tracker-Presentation`| Presentation state: `interactive`, `idle`, or `dormant`. |
-| `X-Tracker-Policy` | Schedule and interaction policy as `;`-separated `key=value` pairs: `v` (policy version), `phase`, `until` (epoch seconds of next phase change), `suspend` (`0`/`1`), `session`, `fast`, `hold` (seconds), `sl` (session lighting `brightness,warmth`). |
+| `X-Tracker-Policy` | Schedule and interaction policy as `;`-separated `key=value` pairs: `v` (policy version), `phase`, `until` (epoch seconds of next phase change), `suspend` (`0`/`1`), `session`, `fast`, `hold` (seconds), `sl` (session lighting `brightness,warmth`), and optional `views` (comma-separated list of assigned dashboard view IDs). |
 | `X-Tracker-Mode` | Run mode directive targeted at the client. |
 | `X-Tracker-Action` | Queued action popped for this client (`restart`, `update`, etc.). |
 | `X-Tracker-Diag` | Diagnostics dump request popped for this client (`quick` or `full`). |
@@ -296,3 +296,133 @@ Requests that devices upload a diagnostic dump on their next poll.
 
 ### 5.5 `POST /stop` and `POST /resume`
 Temporarily halts or resumes client polling fleet-wide.
+
+---
+
+## 6. Modular Dashboards & Layout Management Endpoints
+
+### 6.1 `GET /dashboards`
+Lists all available dashboards (both built-in presets and user-configured layouts).
+
+#### Response (`200 OK`, `application/json`)
+```json
+{
+  "dashboards": [
+    {
+      "id": "morning",
+      "title": "Morning (Citi Bike Hero)",
+      "description": "Citi Bike dock hero with compact bus departure bar",
+      "is_builtin": true
+    },
+    {
+      "id": "weather",
+      "title": "Hoboken Local Weather",
+      "description": "Real-time conditions, temperatures, and 4-day forecast",
+      "is_builtin": true,
+      "layout": { "type": "vstack", "children": [...] }
+    }
+  ]
+}
+```
+
+### 6.2 `GET /dashboards/<id>`
+Retrieves the specification JSON for a specific dashboard.
+
+#### Response (`200 OK`, `application/json`)
+```json
+{
+  "id": "weather",
+  "title": "Hoboken Local Weather",
+  "version": 1,
+  "layout": {
+    "type": "vstack",
+    "children": [
+      {
+        "type": "header",
+        "title": "HOBOKEN LOCAL FORECAST"
+      },
+      {
+        "type": "weather_hero",
+        "show_details": true
+      }
+    ]
+  },
+  "data_sources": {}
+}
+```
+
+### 6.3 `GET /dashboards/<id>.png`
+Directly renders and streams the PNG image for the requested dashboard view `<id>`.
+Supports all query parameters accepted by `/dashboard.png` (`mock`, `kindle`, `rotate`, `w`, `h`, `scale`, `present`).
+
+#### Example
+```bash
+curl -o weather.png "http://localhost:8000/dashboards/weather.png?kindle=pw5&rotate=90"
+```
+
+### 6.4 `GET /dashboards/<id>/data`
+Returns live (or mock) telemetry values for the data sources referenced by dashboard `<id>`.
+
+#### Response (`200 OK`, `application/json`)
+```json
+{
+  "id": "weather",
+  "title": "Hoboken Local Weather",
+  "timestamp": 1791653800.0,
+  "stops": {...},
+  "stop_status": {...},
+  "citibike": [...],
+  "weather": {
+    "temp": 63,
+    "apparent_temp": 62,
+    "condition": "Partly cloudy",
+    "humidity": 58,
+    "forecast": [...]
+  },
+  "custom": {}
+}
+```
+
+### 6.5 `POST /dashboards/<id>`
+Creates or updates a custom dashboard layout. Gated by control token authentication (§9).
+
+#### Request Headers
+- `X-Tracker-Token: <token>` (required)
+- `Content-Type: application/json`
+
+#### Request Body
+```json
+{
+  "title": "My Home Assistant Dashboard",
+  "layout": {
+    "type": "vstack",
+    "children": [
+      {
+        "type": "header",
+        "title": "HOME TELEMETRY"
+      },
+      {
+        "type": "metric_card",
+        "title": "LIVING ROOM TEMP",
+        "source": "ha.state",
+        "unit": "°F"
+      }
+    ]
+  },
+  "data_sources": {
+    "ha": {
+      "type": "http_json",
+      "url": "http://homeassistant.local:8123/api/states/sensor.living_room_temperature",
+      "headers": {
+        "Authorization": "Bearer ${HASS_TOKEN}"
+      },
+      "cache_ttl": 60
+    }
+  }
+}
+```
+
+#### Response
+- `200 OK`: Dashboard validated, persisted to `config/dashboards/<id>.json`, and loaded into registry.
+- `400 Bad Request`: Schema validation error (`DashboardError`).
+- `403 Forbidden`: Invalid or missing control token.

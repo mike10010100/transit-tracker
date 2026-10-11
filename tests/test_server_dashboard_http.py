@@ -17,6 +17,7 @@ from unittest.mock import patch
 import discovery
 import ota
 import schedule
+from dashboards import REGISTRY
 from PIL import Image
 from state_machine import ConfigStore
 from test_server_http import ServerHTTPTestBase, _auth_headers, _http, _http_get
@@ -718,6 +719,106 @@ class TestFormatForKindle(unittest.TestCase):
         self.assertAlmostEqual(
             server.native_render_scale(1448, 1072, 800), 1.81, places=2
         )
+
+
+class TestModularDashboardEndpoints(ServerHTTPTestBase):
+    def test_get_dashboards_list(self):
+        status, headers, body = _http_get(self.port, "/dashboards")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Content-Type"), "application/json")
+        data = json.loads(body.decode("utf-8"))
+        self.assertIn("dashboards", data)
+        ids = [d["id"] for d in data["dashboards"]]
+        self.assertIn("morning", ids)
+        self.assertIn("evening", ids)
+        self.assertIn("weather", ids)
+        self.assertIn("bus_focus", ids)
+        self.assertIn("citibike_focus", ids)
+
+    def test_get_dashboard_spec(self):
+        status, _headers, body = _http_get(self.port, "/dashboards/weather")
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(data["id"], "weather")
+        self.assertIn("layout", data)
+
+    def test_get_dashboard_spec_not_found(self):
+        status, _, _ = _http_get(self.port, "/dashboards/non_existent_dashboard")
+        self.assertEqual(status, 404)
+
+    def test_get_dashboard_png(self):
+        status, headers, body = _http_get(self.port, "/dashboards/weather.png?mock=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Content-Type"), "image/png")
+        self.assertGreater(len(body), 100)
+        img = Image.open(io.BytesIO(body))
+        self.assertEqual(img.size, (800, 480))
+
+    def test_get_dashboard_png_not_found(self):
+        status, _, _ = _http_get(self.port, "/dashboards/non_existent.png?mock=1")
+        self.assertEqual(status, 404)
+
+    def test_get_dashboard_data(self):
+        status, headers, body = _http_get(self.port, "/dashboards/weather/data?mock=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Content-Type"), "application/json")
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(data["id"], "weather")
+        self.assertIn("weather", data)
+        self.assertIn("stops", data)
+        self.assertIn("citibike", data)
+
+    def test_post_custom_dashboard_unauthorized(self):
+        payload = json.dumps(
+            {"title": "Test Dash", "layout": {"type": "weather_hero"}}
+        ).encode("utf-8")
+        status, _, _ = _http("POST", self.port, "/dashboards/my_dash", body=payload)
+        self.assertEqual(status, 403)
+
+    def test_post_custom_dashboard_and_render(self):
+        spec_data = {
+            "title": "Home Test Dashboard",
+            "layout": {
+                "type": "vstack",
+                "children": [
+                    {"type": "header", "title": "MY CUSTOM VIEW"},
+                    {"type": "weather_hero"},
+                ],
+            },
+        }
+        payload = json.dumps(spec_data).encode("utf-8")
+        hdrs = _auth_headers({"Content-Type": "application/json"})
+        try:
+            status, _, body = _http(
+                "POST", self.port, "/dashboards/custom_test", headers=hdrs, body=payload
+            )
+            self.assertEqual(status, 200)
+            saved = json.loads(body.decode("utf-8"))
+            self.assertEqual(saved["id"], "custom_test")
+            self.assertEqual(saved["title"], "Home Test Dashboard")
+
+            # Now GET /dashboards/custom_test
+            status_get, _, body_get = _http_get(self.port, "/dashboards/custom_test")
+            self.assertEqual(status_get, 200)
+            self.assertEqual(json.loads(body_get.decode("utf-8"))["id"], "custom_test")
+
+            # Now GET /dashboards/custom_test.png
+            status_png, headers_png, body_png = _http_get(
+                self.port, "/dashboards/custom_test.png?mock=1"
+            )
+            self.assertEqual(status_png, 200)
+            self.assertEqual(headers_png.get("Content-Type"), "image/png")
+            img = Image.open(io.BytesIO(body_png))
+            self.assertEqual(img.size, (800, 480))
+        finally:
+            dash_path = os.path.join(REGISTRY.dashboards_dir, "custom_test.json")
+            if os.path.exists(dash_path):
+                try:
+                    os.remove(dash_path)
+                except OSError:
+                    pass
+            with REGISTRY._lock:
+                REGISTRY._dashboards.pop("custom_test", None)
 
 
 if __name__ == "__main__":

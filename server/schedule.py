@@ -152,6 +152,8 @@ def get_schedule_report(
             "realtime": state.realtime,
             "suspend": state.suspend,
             "view": state.view,
+            "views": list(state.views),
+            "interaction_view": state.interaction_view,
             "until": _iso(state.until),
         },
         "transitions": [

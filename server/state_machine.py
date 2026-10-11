@@ -38,7 +38,15 @@ MAX_CONFIG_BYTES = 64 * 1024
 
 DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 PRESENTATIONS = ("interactive", "idle", "dormant")
-VIEWS = ("morning", "evening")
+VIEWS: tuple[str, ...] = (
+    "morning",
+    "evening",
+    "weather",
+    "bus_focus",
+    "citibike_focus",
+    "split",
+    "minimal",
+)
 
 # Poll intervals advertised to clients: a 0 or negative value would make
 # clients spin, a huge one would freeze the board.
@@ -61,6 +69,7 @@ POLICY_VERSION = 1
 
 _PHASE_NAME_RE = re.compile(r"\A[a-z][a-z0-9_-]{0,23}\Z")
 _TIME_RE = re.compile(r"\A([01]\d|2[0-4]):([0-5]\d)\Z")
+_VIEW_NAME_RE = re.compile(r"\A[a-z0-9_-]{1,32}\Z")
 
 
 class ConfigError(ValueError):
@@ -82,6 +91,9 @@ class PhaseConfig:
     lighting: Lighting = field(default_factory=Lighting)
     realtime: bool = True
     suspend: bool = True
+    view: Optional[str] = None
+    views: tuple[str, ...] = ()
+    interaction_view: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +109,8 @@ class Window:
     end: int
     days: frozenset[int] = frozenset(range(7))
     view: Optional[str] = None
+    views: tuple[str, ...] = ()
+    interaction_view: Optional[str] = None
 
     def matches(self, dt: datetime) -> bool:
         minute = dt.hour * 60 + dt.minute
@@ -129,23 +143,31 @@ class ScheduleConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serialisable view, in the same shape as schedule.json."""
+        out_phases: dict[str, Any] = {}
+        for name, p in self.phases.items():
+            pd: dict[str, Any] = {
+                "poll_interval": p.poll_interval,
+                "presentation": p.presentation,
+                "status_note": p.status_note,
+                "lighting": {
+                    "brightness": p.lighting.brightness,
+                    "warmth": p.lighting.warmth,
+                },
+                "realtime": p.realtime,
+                "suspend": p.suspend,
+            }
+            if p.view:
+                pd["view"] = p.view
+            if p.views:
+                pd["views"] = list(p.views)
+            if p.interaction_view:
+                pd["interaction_view"] = p.interaction_view
+            out_phases[name] = pd
+
         return {
             "version": CONFIG_VERSION,
             "default_phase": self.default_phase,
-            "phases": {
-                name: {
-                    "poll_interval": p.poll_interval,
-                    "presentation": p.presentation,
-                    "status_note": p.status_note,
-                    "lighting": {
-                        "brightness": p.lighting.brightness,
-                        "warmth": p.lighting.warmth,
-                    },
-                    "realtime": p.realtime,
-                    "suspend": p.suspend,
-                }
-                for name, p in self.phases.items()
-            },
+            "phases": out_phases,
             "windows": [_window_to_dict(w) for w in self.windows],
             "interaction": {
                 "session_timeout": self.interaction.session_timeout,
@@ -172,6 +194,8 @@ class ResolvedState:
     suspend: bool
     view: Optional[str]
     until: Optional[datetime]
+    views: tuple[str, ...] = ()
+    interaction_view: Optional[str] = None
 
 
 def _fmt_minutes(minutes: int) -> str:
@@ -187,6 +211,10 @@ def _window_to_dict(w: Window) -> dict[str, Any]:
     }
     if w.view:
         out["view"] = w.view
+    if w.views:
+        out["views"] = list(w.views)
+    if w.interaction_view:
+        out["interaction_view"] = w.interaction_view
     return out
 
 
@@ -313,6 +341,38 @@ def _parse_lighting(value: Any, base: Lighting, where: str) -> Lighting:
     )
 
 
+def _is_known_view(view: str) -> bool:
+    if view in VIEWS:
+        return True
+    try:
+        from dashboards import REGISTRY
+
+        if REGISTRY.get(view) is not None:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _as_view_name(value: Any, where: str) -> str:
+    if not isinstance(value, str) or not _VIEW_NAME_RE.match(value):
+        raise ConfigError(f"{where}: view name must match [a-z0-9_-]{{1,32}}")
+    if not _is_known_view(value):
+        raise ConfigError(f"{where}: unknown view {value!r}")
+    return value
+
+
+def _as_view_list(value: Any, where: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise ConfigError(f"{where}: expected a non-empty list of view names")
+    if len(value) > 8:
+        raise ConfigError(f"{where}: at most 8 views are allowed")
+    views = []
+    for i, v in enumerate(value):
+        views.append(_as_view_name(v, f"{where}[{i}]"))
+    return tuple(views)
+
+
 _PHASE_KEYS = (
     "poll_interval",
     "presentation",
@@ -320,6 +380,9 @@ _PHASE_KEYS = (
     "lighting",
     "realtime",
     "suspend",
+    "view",
+    "views",
+    "interaction_view",
 )
 
 
@@ -330,6 +393,17 @@ def _parse_phase(name: str, value: Any, base: Optional[PhaseConfig]) -> PhaseCon
     obj = _as_dict(value, where)
     _check_keys(obj, _PHASE_KEYS, where)
     p = base if base is not None else PhaseConfig(name=name)
+
+    view = _as_view_name(obj["view"], f"{where}.view") if "view" in obj else p.view
+    views = _as_view_list(obj["views"], f"{where}.views") if "views" in obj else p.views
+    if "views" in obj and "view" not in obj and views:
+        view = views[0]
+    inter_view = (
+        _as_view_name(obj["interaction_view"], f"{where}.interaction_view")
+        if "interaction_view" in obj
+        else p.interaction_view
+    )
+
     return PhaseConfig(
         name=name,
         poll_interval=_as_int(
@@ -353,6 +427,9 @@ def _parse_phase(name: str, value: Any, base: Optional[PhaseConfig]) -> PhaseCon
         ),
         realtime=_as_bool(obj.get("realtime", p.realtime), f"{where}.realtime"),
         suspend=_as_bool(obj.get("suspend", p.suspend), f"{where}.suspend"),
+        view=view,
+        views=views,
+        interaction_view=inter_view,
     )
 
 
@@ -368,7 +445,11 @@ def _parse_days(value: Any, where: str) -> frozenset[int]:
 def _parse_window(index: int, value: Any) -> Window:
     where = f"windows[{index}]"
     obj = _as_dict(value, where)
-    _check_keys(obj, ("phase", "start", "end", "days", "view"), where)
+    _check_keys(
+        obj,
+        ("phase", "start", "end", "days", "view", "views", "interaction_view"),
+        where,
+    )
     for key in ("phase", "start", "end"):
         if key not in obj:
             raise ConfigError(f"{where}: missing required key {key}")
@@ -381,8 +462,16 @@ def _parse_window(index: int, value: Any) -> Window:
     if end == 0:
         end = 1440
     days = _parse_days(obj["days"], f"{where}.days") if "days" in obj else ALL_DAYS
-    view = _as_choice(obj["view"], VIEWS, f"{where}.view") if "view" in obj else None
-    return Window(obj["phase"], start, end, days, view)
+    view = _as_view_name(obj["view"], f"{where}.view") if "view" in obj else None
+    views = _as_view_list(obj["views"], f"{where}.views") if "views" in obj else ()
+    if "views" in obj and "view" not in obj and views:
+        view = views[0]
+    inter_view = (
+        _as_view_name(obj["interaction_view"], f"{where}.interaction_view")
+        if "interaction_view" in obj
+        else None
+    )
+    return Window(obj["phase"], start, end, days, view, views, inter_view)
 
 
 def _parse_interaction(value: Any, base: InteractionConfig) -> InteractionConfig:
@@ -620,11 +709,14 @@ def apply_env_overrides(
 def _match(cfg: ScheduleConfig, dt: datetime) -> tuple[str, Optional[str]]:
     """Returns (phase name, window view) for ``dt``, ignoring overrides."""
     if cfg.force_phase:
-        return cfg.force_phase, None
+        p = cfg.phases.get(cfg.force_phase)
+        return cfg.force_phase, (p.view if p else None)
     for w in cfg.windows:
         if w.matches(dt):
-            return w.phase, w.view
-    return cfg.default_phase, None
+            phase = cfg.phases.get(w.phase)
+            return w.phase, (w.view or (phase.view if phase else None))
+    default_p = cfg.phases.get(cfg.default_phase)
+    return cfg.default_phase, (default_p.view if default_p else None)
 
 
 def _candidate_times(cfg: ScheduleConfig, dt: datetime) -> list[datetime]:
@@ -671,7 +763,11 @@ def render_note(template: str, until: Optional[datetime]) -> str:
     return template.replace("{until}", format_clock(until))
 
 
-def resolve(cfg: ScheduleConfig, dt: Optional[datetime] = None) -> ResolvedState:
+def resolve(
+    cfg: ScheduleConfig,
+    dt: Optional[datetime] = None,
+    interactive: bool = False,
+) -> ResolvedState:
     """
     Resolves the effective schedule state at ``dt`` (default: now). Pure apart
     from reading the clock when ``dt`` is None.
@@ -687,6 +783,28 @@ def resolve(cfg: ScheduleConfig, dt: Optional[datetime] = None) -> ResolvedState
         # Testing aid: always interactive with the fast cadence.
         presentation = "interactive"
         poll_interval = 60
+
+    # Determine matched window for views and interaction_view
+    matched_window = None
+    if not cfg.force_phase:
+        for w in cfg.windows:
+            if w.matches(dt):
+                matched_window = w
+                break
+
+    resolved_views: tuple[str, ...] = ()
+    resolved_inter: Optional[str] = None
+    if matched_window:
+        resolved_views = matched_window.views or phase.views
+        resolved_inter = matched_window.interaction_view or phase.interaction_view
+    else:
+        resolved_views = phase.views
+        resolved_inter = phase.interaction_view
+
+    effective_view = view
+    if (interactive or presentation == "interactive") and resolved_inter:
+        effective_view = resolved_inter
+
     note = (
         "" if presentation == "interactive" else render_note(phase.status_note, until)
     )
@@ -698,8 +816,10 @@ def resolve(cfg: ScheduleConfig, dt: Optional[datetime] = None) -> ResolvedState
         lighting=phase.lighting,
         realtime=phase.realtime,
         suspend=phase.suspend and presentation != "interactive",
-        view=view,
+        view=effective_view,
         until=until,
+        views=resolved_views,
+        interaction_view=resolved_inter,
     )
 
 
@@ -763,6 +883,8 @@ def format_policy_header(state: ResolvedState, cfg: ScheduleConfig) -> str:
             f"sl={ia.session_lighting.brightness},{ia.session_lighting.warmth}",
         ]
     )
+    if state.views:
+        parts.append(f"views={','.join(state.views)}")
     return ";".join(parts)
 
 

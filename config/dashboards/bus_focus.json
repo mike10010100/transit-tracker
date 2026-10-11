@@ -1,0 +1,29 @@
+{
+  "id": "bus_focus",
+  "title": "NJ Transit 126 Bus Focus",
+  "description": "Dedicated Route 126 departure countdown board for Washington & Clinton St",
+  "version": 1,
+  "layout": {
+    "type": "vstack",
+    "children": [
+      {
+        "type": "header",
+        "badge": "126",
+        "title": "HOBOKEN → NYC PORT AUTHORITY",
+        "subtitle": "NJ TRANSIT ROUTE 126 EXPRESS",
+        "show_time": true,
+        "show_battery": true,
+        "show_date": true
+      },
+      {
+        "type": "bus_hero",
+        "flex": 3.0,
+        "stops": ["20512", "20494"],
+        "route": "126"
+      },
+      {
+        "type": "button_bar"
+      }
+    ]
+  }
+}

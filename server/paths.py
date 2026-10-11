@@ -42,3 +42,23 @@ def resolve_cache_dir() -> str:
     except OSError:
         pass
     return os.path.join(REPO_DIR, "cache")
+
+
+def resolve_dashboards_dir() -> str:
+    """Resolves DASHBOARDS_DIR. Never raises."""
+    env = os.environ.get("DASHBOARDS_DIR", "").strip()
+    if env:
+        return env
+    docker_dash_dir = "/app/config/dashboards"
+    try:
+        os.makedirs(docker_dash_dir, exist_ok=True)
+        if os.access(docker_dash_dir, os.W_OK):
+            return docker_dash_dir
+    except OSError:
+        pass
+    repo_dash_dir = os.path.join(REPO_DIR, "config", "dashboards")
+    try:
+        os.makedirs(repo_dash_dir, exist_ok=True)
+    except OSError:
+        pass
+    return repo_dash_dir

@@ -27,6 +27,8 @@ from citibike import (
     CB_STATUS_ERROR,
     CitiBikeTracker,
 )
+from dashboards import REGISTRY, DashboardError
+from data_sources import GLOBAL_DATA_SOURCES
 from device_registry import (
     get_device_registry,
     sanitize_client_id,
@@ -77,6 +79,7 @@ from schedule import (
     set_schedule_override,
 )
 from version import VERSION
+from weather import WeatherTracker, get_mock_weather_data
 
 __all__ = [
     "PORT",
@@ -328,6 +331,8 @@ def get_fresh_dashboard_image(
     presentation: str = "interactive",
     status_note: str = "",
     interactive: bool = False,
+    available_views: Optional[list[str]] = None,
+    weather_data: Any = None,
 ) -> Image.Image:
     stops_data, stop_status, cb_data = get_fresh_data(
         use_mock=use_mock, interactive=interactive
@@ -346,6 +351,7 @@ def get_fresh_dashboard_image(
         is_charging,
         presentation,
         status_note,
+        tuple(available_views) if available_views else (),
         data_time,
     )
     with _render_lock:
@@ -368,6 +374,8 @@ def get_fresh_dashboard_image(
         scale=scale,
         presentation=presentation,
         status_note=status_note,
+        available_views=available_views,
+        weather_data=weather_data,
     )
 
     img_bytes = buf.getvalue()
@@ -833,6 +841,42 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": str(err)})
             return
 
+        if parsed.path == "/dashboards" or parsed.path.startswith("/dashboards/"):
+            if not check_control_auth(self):
+                self._send_forbidden()
+                return
+            body = self._read_body(65536)
+            if body is None:
+                return
+            try:
+                data = json.loads(body.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError) as json_err:
+                self._send_json(400, {"error": f"invalid JSON: {json_err}"})
+                return
+            if not isinstance(data, dict):
+                self._send_json(400, {"error": "expected a JSON object"})
+                return
+
+            if parsed.path.startswith("/dashboards/"):
+                did = parsed.path[len("/dashboards/") :].strip().lower()
+                if "/" in did:
+                    self._send_empty(404)
+                    return
+                if did:
+                    data["id"] = did
+            if not data.get("id"):
+                self._send_json(400, {"error": "missing dashboard id"})
+                return
+
+            try:
+                saved = REGISTRY.save_custom_dashboard(data)
+                self._send_json(200, saved.to_dict())
+            except DashboardError as err:
+                self._send_json(400, {"error": str(err)})
+            except Exception as err:
+                self._send_json(500, {"error": str(err)})
+            return
+
         self._send_empty(404)
 
     def do_GET(self):
@@ -844,7 +888,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         remote_ip = self._remote_ip()
         registry = get_device_registry()
         if client_id != "default" or (
-            parsed.path in ["/dashboard.png", "/bus.png"]
+            (
+                parsed.path in ["/dashboard.png", "/bus.png"]
+                or (
+                    parsed.path.startswith("/dashboards/")
+                    and parsed.path.endswith(".png")
+                )
+            )
             and self._is_client_device(params)
         ):
             registry.get_or_register(client_id, remote_ip)
@@ -923,6 +973,83 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self._write_body(payload)
             return
+
+        if parsed.path == "/dashboards":
+            dashboards = [d.to_dict() for d in REGISTRY.list_all()]
+            payload = json.dumps({"dashboards": dashboards}, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self._write_body(payload)
+            return
+
+        if parsed.path.startswith("/dashboards/") and not parsed.path.endswith(".png"):
+            subpath = parsed.path[len("/dashboards/") :]
+            if "/" in subpath:
+                did, action = subpath.split("/", 1)
+            else:
+                did, action = subpath, ""
+
+            spec = REGISTRY.get(did)
+            if spec is None:
+                self._send_empty(404)
+                return
+
+            if action == "":
+                payload = json.dumps(spec.to_dict(), indent=2).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self._write_body(payload)
+                return
+            elif action == "data":
+                use_mock = "mock" in params
+                stops_data, stop_status, cb_data = get_fresh_data(use_mock=use_mock)
+                try:
+                    weather_data = (
+                        get_mock_weather_data()
+                        if use_mock
+                        else WeatherTracker().get_weather()
+                    )
+                    weather_dict = weather_data.to_dict() if weather_data else {}
+                except Exception:
+                    weather_dict = {}
+
+                custom_data: dict[str, Any] = {}
+                if spec.data_sources_config:
+                    for s_name, s_cfg in spec.data_sources_config.items():
+                        src = GLOBAL_DATA_SOURCES.create_source(s_cfg)
+                        if src:
+                            try:
+                                custom_data[s_name] = src.get_data(is_mock=use_mock)
+                            except Exception as e:
+                                custom_data[s_name] = {"error": str(e)}
+
+                data_payload = {
+                    "id": spec.id,
+                    "title": spec.title,
+                    "timestamp": time.time(),
+                    "stops": stops_data,
+                    "stop_status": stop_status,
+                    "citibike": cb_data,
+                    "weather": weather_dict,
+                    "custom": custom_data,
+                }
+                payload = json.dumps(data_payload, indent=2).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self._write_body(payload)
+                return
+            else:
+                self._send_empty(404)
+                return
 
         if parsed.path == "/tracker-arm.manifest":
             info = get_valid_manifest()
@@ -1089,7 +1216,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._write_body(blob.data)
             return
 
-        if parsed.path in ["/dashboard.png", "/bus.png"]:
+        is_dash_png = parsed.path in ["/dashboard.png", "/bus.png"]
+        is_custom_png = parsed.path.startswith("/dashboards/") and parsed.path.endswith(
+            ".png"
+        )
+        if is_dash_png or is_custom_png:
             nonce = self.headers.get(NONCE_HEADER, "").strip()
 
             if tracker_stopped:
@@ -1112,6 +1243,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
 
+            if is_custom_png:
+                custom_did = parsed.path[len("/dashboards/") : -4].strip().lower()
+                if not custom_did or REGISTRY.get(custom_did) is None:
+                    self._send_empty(404)
+                    return
+                raw_view = custom_did
+            else:
+                raw_view = (
+                    params.get("view", [self.headers.get("X-Tracker-View", "auto")])[0]
+                    .lower()
+                    .strip()
+                )
+
             use_mock = "mock" in params
             kindle_mode = params.get("kindle", [None])[0]
 
@@ -1124,15 +1268,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_empty(400)
                 return
 
-            raw_view = (
-                params.get("view", [self.headers.get("X-Tracker-View", "auto")])[0]
-                .lower()
-                .strip()
-            )
             if raw_view in ("morning", "citi", "citibike", "am"):
                 view_param = "morning"
             elif raw_view in ("evening", "bus", "pm", "afternoon", "night"):
                 view_param = "evening"
+            elif REGISTRY.get(raw_view) is not None:
+                view_param = raw_view
             else:
                 view_param = "auto"
 
@@ -1166,6 +1307,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             render_view = (
                 sched.view if (view_param == "auto" and sched.view) else view_param
             )
+            avail_views = list(sched.views) if sched.views else None
             render_w = 800
             render_h = 480
 
@@ -1192,6 +1334,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     presentation=presentation,
                     status_note=status_note,
                     interactive=interactive_override,
+                    available_views=avail_views,
                 )
                 img = format_for_kindle(
                     img,
@@ -1209,6 +1352,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     height=render_h,
                     presentation=presentation,
                     status_note=status_note,
+                    available_views=avail_views,
                 )
 
             buf = io.BytesIO()
@@ -1516,6 +1660,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 else '<span class="badge" style="background:#2b8a3e;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:bold;">AUTO (SCHEDULED)</span>'
             )
 
+            auto_style = (
+                ' style="font-weight:bold;text-decoration:underline;"'
+                if current_view == "auto"
+                else ""
+            )
+            view_links = [
+                f'<a href="/?view=auto"{auto_style}>Auto (AM Citi / PM Bus)</a>'
+            ]
+            for dash_spec in REGISTRY.list_all():
+                is_cur = current_view == dash_spec.id
+                style_attr = (
+                    ' style="font-weight:bold;text-decoration:underline;"'
+                    if is_cur
+                    else ""
+                )
+                view_links.append(
+                    f'<a href="/?view={dash_spec.id}"{style_attr}>{html.escape(dash_spec.title)}</a>'
+                )
+            views_html = " | ".join(view_links)
+
             script_nonce = secrets.token_hex(16)
 
             csp = (
@@ -1743,9 +1907,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     </div>
     <div class="links">
         <strong>View Mode:</strong>
-        <a href="/?view=auto">Auto (AM Citi / PM Bus)</a> |
-        <a href="/?view=morning">Morning (Citi Bike Hero)</a> |
-        <a href="/?view=evening">Evening (Bus Hero)</a>
+        {views_html}
     </div>
     <div class="links">
         <a href="/dashboard.png?view={current_view}" target="_blank">Standard (800x480)</a> |

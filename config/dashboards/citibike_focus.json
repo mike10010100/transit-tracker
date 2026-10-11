@@ -1,0 +1,27 @@
+{
+  "id": "citibike_focus",
+  "title": "Citi Bike Hub Focus",
+  "description": "Dedicated Citi Bike station inventory and e-bike availability",
+  "version": 1,
+  "layout": {
+    "type": "vstack",
+    "children": [
+      {
+        "type": "header",
+        "badge": "CITI BIKE",
+        "title": "HOBOKEN DOCKS & E-BIKES",
+        "subtitle": "LIVE STATION INVENTORY",
+        "show_time": true,
+        "show_battery": true,
+        "show_date": true
+      },
+      {
+        "type": "citibike_hero",
+        "flex": 3.0
+      },
+      {
+        "type": "button_bar"
+      }
+    ]
+  }
+}

@@ -142,6 +142,19 @@ func (tc *TrackerClient) cycleViewMode() string {
 		}
 	}
 
+	policyViews := tc.currentPolicy().Views
+	if len(policyViews) > 1 {
+		idx := -1
+		for i, v := range policyViews {
+			if v == current {
+				idx = i
+				break
+			}
+		}
+		next := policyViews[(idx+1)%len(policyViews)]
+		return tc.setExplicitViewMode(next)
+	}
+
 	// Clean 2-way toggle between Morning (Citi Bike) and Evening (Bus) views
 	next := "morning"
 	if current == "morning" {
