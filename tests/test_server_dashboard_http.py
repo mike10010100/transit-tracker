@@ -19,7 +19,7 @@ import ota
 import schedule
 from PIL import Image
 from state_machine import ConfigStore
-from test_server_http import ServerHTTPTestBase, _auth_headers, _http_get
+from test_server_http import ServerHTTPTestBase, _auth_headers, _http, _http_get
 
 import server
 from server import format_for_kindle, sha256_file
@@ -408,6 +408,124 @@ class TestScheduleEndpoint(ServerHTTPTestBase):
             status, _headers, body = _http_get(self.port, "/")
         self.assertEqual(status, 200)
         self.assertIn(b"Phase: <strong>peak</strong>", body)
+        self.assertIn(b"State Machine Schedule:", body)
+        self.assertIn(b"Quick Override:", body)
+        self.assertIn(b"Active Windows:", body)
+        self.assertIn(b"schedPhaseSelect", body)
+        self.assertIn(b"schedFastPollCheck", body)
+        self.assertIn(b"applySchedOverrideBtn", body)
+        self.assertIn(b"clearSchedOverrideBtn", body)
+        self.assertIn(b"saveSchedBtn", body)
+
+    def test_post_schedule_requires_auth(self):
+        status, _headers, _body = _http("POST", self.port, "/schedule", body=b"{}")
+        self.assertEqual(status, 403)
+        status, _headers, _body = _http(
+            "POST",
+            self.port,
+            "/schedule",
+            headers={"X-Tracker-Token": "wrong"},
+            body=b"{}",
+        )
+        self.assertEqual(status, 403)
+
+    def test_post_schedule_override_and_clear(self):
+        # Override phase and fast poll
+        payload = json.dumps(
+            {"action": "override", "force_phase": "overnight", "force_fast_poll": True}
+        )
+        status, headers, body = _http(
+            "POST",
+            self.port,
+            "/schedule",
+            headers=_auth_headers(),
+            body=payload.encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+        rep = json.loads(body)
+        self.assertEqual(rep["overrides"]["force_phase"], "overnight")
+        self.assertTrue(rep["overrides"]["force_fast_poll"])
+
+        # Clear override
+        payload_clear = json.dumps({"action": "clear_override"})
+        status, headers, body = _http(
+            "POST",
+            self.port,
+            "/schedule",
+            headers=_auth_headers(),
+            body=payload_clear.encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+        rep_clear = json.loads(body)
+        self.assertIsNone(rep_clear["overrides"]["force_phase"])
+        self.assertFalse(rep_clear["overrides"]["force_fast_poll"])
+
+    def test_post_schedule_save_and_reset(self):
+        # Valid save
+        valid_cfg = {
+            "version": 1,
+            "default_phase": "peak",
+            "phases": {"peak": {"poll_interval": 60, "presentation": "interactive"}},
+            "windows": [{"phase": "peak", "start": "08:00", "end": "10:00"}],
+        }
+        payload = json.dumps({"action": "save", "config": valid_cfg})
+        status, headers, body = _http(
+            "POST",
+            self.port,
+            "/schedule",
+            headers=_auth_headers(),
+            body=payload.encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+        rep = json.loads(body)
+        self.assertEqual(rep["config"]["default_phase"], "peak")
+
+        # Invalid save returns 400
+        invalid_payload = json.dumps({"action": "save", "config": {"version": 999}})
+        status, headers, body = _http(
+            "POST",
+            self.port,
+            "/schedule",
+            headers=_auth_headers(),
+            body=invalid_payload.encode("utf-8"),
+        )
+        self.assertEqual(status, 400)
+        err = json.loads(body)
+        self.assertIn("error", err)
+
+        # Reset
+        reset_payload = json.dumps({"action": "reset"})
+        status, headers, body = _http(
+            "POST",
+            self.port,
+            "/schedule",
+            headers=_auth_headers(),
+            body=reset_payload.encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+        rep_reset = json.loads(body)
+        self.assertEqual(rep_reset["config"]["default_phase"], "offpeak")
+
+    def test_post_schedule_bad_payload(self):
+        # Unknown action
+        status, headers, body = _http(
+            "POST",
+            self.port,
+            "/schedule",
+            headers=_auth_headers(),
+            body=json.dumps({"action": "invalid_xyz"}).encode("utf-8"),
+        )
+        self.assertEqual(status, 400)
+
+        # Invalid json
+        status, headers, body = _http(
+            "POST",
+            self.port,
+            "/schedule",
+            headers=_auth_headers(),
+            body=b"not-json-at-all",
+        )
+        self.assertEqual(status, 400)
 
 
 class TestMdnsAdvertiser(unittest.TestCase):

@@ -820,6 +820,8 @@ class ConfigStore:
         self._config, _ = apply_env_overrides(default_config(), self.env, False)
         self.source = "built-in defaults"
         self.error = ""
+        self._override_phase: Optional[str] = None
+        self._override_fast_poll: Optional[bool] = None
         self.get()
 
     def _file_stamp(self) -> Optional[tuple[int, int]]:
@@ -829,11 +831,22 @@ class ConfigStore:
             return None
         return (st.st_mtime_ns, st.st_size)
 
+    def _apply_runtime_overrides(self, cfg: ScheduleConfig) -> ScheduleConfig:
+        phase = cfg.force_phase
+        if self._override_phase is not None:
+            phase = self._override_phase
+        fast_poll = cfg.force_fast_poll
+        if self._override_fast_poll is not None:
+            fast_poll = self._override_fast_poll
+        if phase != cfg.force_phase or fast_poll != cfg.force_fast_poll:
+            return replace(cfg, force_phase=phase, force_fast_poll=fast_poll)
+        return cfg
+
     def get(self) -> ScheduleConfig:
         stamp = self._file_stamp()
         with self._lock:
             if stamp == self._stamp:
-                return self._config
+                return self._apply_runtime_overrides(self._config)
             self._stamp = stamp
             try:
                 cfg, warnings = load_config(self.path, self.env)
@@ -842,14 +855,111 @@ class ConfigStore:
                 self._log(
                     f"[Schedule] rejected {self.path}: {e}; keeping {self.source}."
                 )
-                return self._config
+                return self._apply_runtime_overrides(self._config)
             self._config = cfg
             self.error = ""
             self.source = self.path if stamp is not None else "built-in defaults"
             for w in warnings:
                 self._log(f"[Schedule] warning: {w}")
             self._log(f"[Schedule] loaded schedule from {self.source}.")
+            return self._apply_runtime_overrides(self._config)
+
+    def set_override(
+        self,
+        force_phase: Optional[str] = None,
+        force_fast_poll: Optional[bool] = None,
+    ) -> ScheduleConfig:
+        with self._lock:
+            if force_phase is not None:
+                clean_phase = force_phase.strip().lower()
+                if clean_phase in ("auto", "none", "clear", ""):
+                    clean_phase = ""
+                elif clean_phase not in self._config.phases:
+                    raise ConfigError(f"unknown phase {clean_phase!r}")
+                self._override_phase = clean_phase
+            if force_fast_poll is not None:
+                self._override_fast_poll = bool(force_fast_poll)
+            self._config = self._apply_runtime_overrides(self._config)
+            self._log(
+                f"[Schedule] override updated: phase={self._override_phase!r}, fast_poll={self._override_fast_poll}"
+            )
             return self._config
+
+    def clear_override(self) -> ScheduleConfig:
+        with self._lock:
+            self._override_phase = ""
+            self._override_fast_poll = False
+            self._config = replace(self._config, force_phase="", force_fast_poll=False)
+            self._log("[Schedule] overrides cleared.")
+            return self._config
+
+    def save_config(
+        self, data: dict[str, Any], target_path: Optional[str] = None
+    ) -> tuple[ScheduleConfig, list[str]]:
+        new_cfg = parse_config(data)
+        dict_data = new_cfg.to_dict()
+        raw = json.dumps(dict_data, indent=2).encode("utf-8") + b"\n"
+
+        target = target_path or self.path
+        written_path = target
+
+        def _atomic_write(dest: str) -> None:
+            parent = os.path.dirname(os.path.abspath(dest))
+            os.makedirs(parent, exist_ok=True)
+            tmp = dest + f".tmp.{os.getpid()}"
+            with open(tmp, "wb") as f:
+                f.write(raw)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            os.replace(tmp, dest)
+
+        try:
+            _atomic_write(target)
+        except OSError as err:
+            try:
+                from paths import resolve_cache_dir
+
+                cache_dir = resolve_cache_dir()
+            except ImportError:
+                cache_dir = os.environ.get("CACHE_DIR", "/app/cache")
+            fallback = os.path.join(cache_dir, "schedule.json")
+            if os.path.abspath(fallback) == os.path.abspath(target):
+                raise ConfigError(
+                    f"failed to write schedule to {target}: {err}"
+                ) from err
+            try:
+                _atomic_write(fallback)
+                written_path = fallback
+                self._log(
+                    f"[Schedule] target {target} not writable ({err}); saved to {fallback}"
+                )
+            except OSError as fallback_err:
+                raise ConfigError(
+                    f"failed to write schedule to {target} ({err}) and fallback {fallback} ({fallback_err})"
+                ) from fallback_err
+
+        with self._lock:
+            self.path = written_path
+            self.source = written_path
+            self.error = ""
+            self._stamp = self._file_stamp()
+            cfg, warnings = apply_env_overrides(
+                new_cfg, self.env, custom_windows=bool(new_cfg.windows)
+            )
+            self._config = self._apply_runtime_overrides(cfg)
+            for w in warnings:
+                self._log(f"[Schedule] warning: {w}")
+            self._log(
+                f"[Schedule] saved and applied schedule configuration to {self.source}."
+            )
+            return self._config, warnings
+
+    def reset_to_default(self) -> tuple[ScheduleConfig, list[str]]:
+        self.clear_override()
+        return self.save_config(default_config().to_dict())
 
     def resolve(self, dt: Optional[datetime] = None) -> ResolvedState:
         return resolve(self.get(), dt)

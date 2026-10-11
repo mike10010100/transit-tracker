@@ -21,6 +21,7 @@ except ImportError:
     Zeroconf = None  # type: ignore[assignment,misc]
     ServiceInfo = None  # type: ignore[assignment,misc]
 
+import state_machine
 from bus_tracker import NJTransitBusTracker, describe_base_url, normalize_arrival
 from citibike import (
     CB_STATUS_ERROR,
@@ -61,6 +62,7 @@ from paths import resolve_cache_dir
 from render_dashboard import STOPS, WIDTH, get_mock_data, render_dashboard, resolve_view
 from schedule import (
     _parse_hour_env,
+    clear_schedule_override,
     get_commute_lighting,
     get_policy_header,
     get_presentation,
@@ -70,6 +72,9 @@ from schedule import (
     get_target_poll_interval,
     is_overnight_hours,
     is_peak_commute_hours,
+    reset_schedule_config,
+    save_schedule_config,
+    set_schedule_override,
 )
 from version import VERSION
 
@@ -429,6 +434,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
 
+    def _send_json(self, code: int, data: Any) -> None:
+        payload = json.dumps(data, indent=2).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self._write_body(payload)
+
     def _read_body(self, max_bytes: int = 65536) -> Optional[bytes]:
         try:
             length_hdr = self.headers.get("Content-Length")
@@ -733,6 +747,90 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 f"[Diagnostics] received {len(body)} bytes from {self.address_string()}{extra}"
             )
             self._send_empty(200)
+            return
+
+        if parsed.path == "/schedule":
+            if not check_control_auth(self):
+                self._send_forbidden()
+                return
+            body = self._read_body(65536)
+            if body is None:
+                return
+            data = {}
+            if body and body.strip():
+                try:
+                    data = json.loads(body.decode("utf-8"))
+                except (ValueError, UnicodeDecodeError) as json_err:
+                    ct = self.headers.get("Content-Type", "")
+                    if "form-urlencoded" in ct and b"=" in body:
+                        qs = urllib.parse.parse_qs(
+                            body.decode("utf-8", errors="ignore")
+                        )
+                        data = {k: v[0] if len(v) == 1 else v for k, v in qs.items()}
+                    else:
+                        self._send_json(400, {"error": f"invalid JSON: {json_err}"})
+                        return
+            if not isinstance(data, dict):
+                self._send_json(400, {"error": "expected a JSON object"})
+                return
+
+            action = str(data.get("action", "")).strip().lower()
+            try:
+                if action == "reset":
+                    reset_schedule_config()
+                elif action == "clear_override":
+                    clear_schedule_override()
+                elif (
+                    action == "override"
+                    or "force_phase" in data
+                    or "force_fast_poll" in data
+                ):
+                    force_phase = data.get("force_phase")
+                    force_fast_poll = data.get("force_fast_poll")
+                    if isinstance(force_phase, str) and force_phase.lower() in (
+                        "auto",
+                        "none",
+                        "clear",
+                        "",
+                    ):
+                        force_phase = ""
+                    if isinstance(force_fast_poll, str):
+                        force_fast_poll = force_fast_poll.lower() in (
+                            "1",
+                            "true",
+                            "yes",
+                            "on",
+                        )
+                    set_schedule_override(
+                        force_phase=force_phase,
+                        force_fast_poll=force_fast_poll,
+                    )
+                elif (
+                    action == "save"
+                    or "config" in data
+                    or "phases" in data
+                    or "windows" in data
+                ):
+                    cfg_data = data.get("config", data)
+                    if not isinstance(cfg_data, dict):
+                        self._send_json(400, {"error": "config must be an object"})
+                        return
+                    save_schedule_config(cfg_data)
+                else:
+                    err_msg = (
+                        f"unknown schedule action {action!r}"
+                        if action
+                        else "no valid schedule action or configuration provided"
+                    )
+                    self._send_json(400, {"error": err_msg})
+                    return
+
+                report = get_schedule_report()
+                self._send_json(200, report)
+            except state_machine.ConfigError as err:
+                self._send_json(400, {"error": str(err)})
+            except Exception as err:
+                self._send_json(500, {"error": str(err)})
             return
 
         self._send_empty(404)
@@ -1366,7 +1464,60 @@ class DashboardHandler(BaseHTTPRequestHandler):
             else:
                 fleet_table_body = "\n".join(rows_html)
 
+            sched_report = get_schedule_report()
+            sched_cfg = sched_report.get("config", {})
+            sched_overrides = sched_report.get("overrides", {})
+            active_force_phase = sched_overrides.get("force_phase") or ""
+            active_force_fast = bool(sched_overrides.get("force_fast_poll"))
+
+            all_phases = sorted(sched_cfg.get("phases", {}).keys())
+            phase_options_html = ['<option value="">Auto (Follow Schedule)</option>']
+            for pname in all_phases:
+                sel = ' selected="selected"' if active_force_phase == pname else ""
+                phase_options_html.append(
+                    f'<option value="{html.escape(pname)}"{sel}>Force {html.escape(pname)}</option>'
+                )
+            phase_select_html = "\n".join(phase_options_html)
+
+            windows_list = sched_cfg.get("windows", [])
+            window_rows = []
+            for w in windows_list:
+                w_phase = html.escape(str(w.get("phase", "")))
+                days_list = [d.capitalize() for d in w.get("days", [])]
+                w_days = html.escape(", ".join(days_list) if days_list else "All Days")
+                w_time = f"{html.escape(str(w.get('start', '')))} – {html.escape(str(w.get('end', '')))}"
+                w_view = html.escape(str(w.get("view", "-")))
+                window_rows.append(
+                    f"<tr><td><strong>{w_phase}</strong></td><td>{w_days}</td><td>{w_time}</td><td>{w_view}</td></tr>"
+                )
+            if not window_rows:
+                sched_windows_tbody = '<tr><td colspan="4" style="text-align:center;color:#888;padding:12px;">No windows defined (default phase active at all times).</td></tr>'
+            else:
+                sched_windows_tbody = "\n".join(window_rows)
+
+            trans_items = []
+            for t in sched_report.get("transitions", []):
+                t_time = html.escape(str(t.get("at", "")))
+                t_phase = html.escape(str(t.get("phase", "")))
+                trans_items.append(
+                    f'<span class="badge" style="background:#333;color:#bbb;padding:2px 8px;border-radius:4px;font-size:11px;border:1px solid #555;">{t_time} &rarr; <strong style="color:#fff;">{t_phase}</strong></span>'
+                )
+            transitions_html = (
+                " ".join(trans_items)
+                if trans_items
+                else "<em>No transitions scheduled in next 24h</em>"
+            )
+
+            sched_json_pretty = html.escape(json.dumps(sched_cfg, indent=2))
+            sched_source_safe = html.escape(str(sched_report.get("source", "defaults")))
+            override_badge = (
+                f'<span class="badge" style="background:#d9480f;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:bold;">OVERRIDE: {html.escape(active_force_phase)}</span>'
+                if active_force_phase
+                else '<span class="badge" style="background:#2b8a3e;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:bold;">AUTO (SCHEDULED)</span>'
+            )
+
             script_nonce = secrets.token_hex(16)
+
             csp = (
                 "default-src 'self'; "
                 "img-src 'self' data:; "
@@ -1504,8 +1655,81 @@ class DashboardHandler(BaseHTTPRequestHandler):
             padding: 4px 8px;
             font-size: 12px;
         }}
+        .schedule-section {{
+            width: 95vw;
+            max-width: 1100px;
+            margin-top: 24px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 16px;
+            box-sizing: border-box;
+        }}
+        .sched-summary {{
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            flex-wrap: wrap;
+            font-size: 15px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #444;
+        }}
+        .sched-toolbar {{
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-top: 12px;
+            padding: 10px;
+            background: #222;
+            border-radius: 6px;
+            font-size: 13px;
+        }}
+        .sched-table-container {{
+            overflow-x: auto;
+            margin-top: 14px;
+        }}
+        table.sched-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            text-align: left;
+        }}
+        table.sched-table th, table.sched-table td {{
+            padding: 8px 10px;
+            border-bottom: 1px solid #3a3a3a;
+            white-space: nowrap;
+        }}
+        table.sched-table th {{
+            background: #333;
+            color: #bbb;
+            font-weight: 600;
+        }}
+        table.sched-table tr:hover {{
+            background: rgba(255, 255, 255, 0.04);
+        }}
+        .sched-editor-container {{
+            margin-top: 14px;
+            background: #1e1e1e;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 12px;
+        }}
+        .sched-editor-container textarea {{
+            width: 100%;
+            box-sizing: border-box;
+            background: #181818;
+            color: #a8d1ff;
+            font-family: monospace;
+            font-size: 12px;
+            border: 1px solid #3a3a3a;
+            border-radius: 4px;
+            padding: 8px;
+            resize: vertical;
+        }}
     </style>
 </head>
+
 <body>
     <img src="/dashboard.png?view={current_view}&amp;t={int(time.time())}" alt="Transit Dashboard" />
     <div class="status">Status: {status_badge}{batt_html}{phase_html}</div>
@@ -1527,6 +1751,64 @@ class DashboardHandler(BaseHTTPRequestHandler):
         <a href="/dashboard.png?view={current_view}" target="_blank">Standard (800x480)</a> |
         <a href="/dashboard.png?kindle=pw5&amp;rotate=90&amp;view={current_view}" target="_blank">Kindle PW5 (Rotated 90°)</a> |
         <a href="/dashboard.png?mock=1&amp;view={current_view}" target="_blank">Mock Preview</a>
+    </div>
+
+    <div class="schedule-section">
+        <div class="sched-summary">
+            <strong>State Machine Schedule:</strong>
+            <span>Active Phase: <strong>{html.escape(panel_state.phase)}</strong></span>
+            <span>Cadence: <strong>{poll_interval}s</strong></span>
+            <span>Source: <code>{sched_source_safe}</code></span>
+            <span>Status: {override_badge}</span>
+        </div>
+        <div class="sched-toolbar">
+            <span style="font-weight:600;">Quick Override:</span>
+            <div class="ctrl-group">
+                <select id="schedPhaseSelect" aria-label="Schedule Phase Override">
+                    {phase_select_html}
+                </select>
+                <label style="display:flex;align-items:center;gap:4px;font-size:12px;margin:0 4px;cursor:pointer;">
+                    <input type="checkbox" id="schedFastPollCheck" {"checked" if active_force_fast else ""}> Fast Poll (60s)
+                </label>
+                <button class="btn-small" id="applySchedOverrideBtn">Apply Override</button>
+                <button class="btn-small" id="clearSchedOverrideBtn">Clear Override</button>
+            </div>
+        </div>
+        <div class="sched-table-container">
+            <div style="font-size:13px;font-weight:600;margin-bottom:6px;color:#bbb;">Active Windows:</div>
+            <table class="sched-table">
+                <thead>
+                    <tr>
+                        <th>Phase</th>
+                        <th>Days</th>
+                        <th>Time Window</th>
+                        <th>View Mode</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {sched_windows_tbody}
+                </tbody>
+            </table>
+        </div>
+        <div style="margin-top:10px;font-size:12px;color:#aaa;">
+            <strong>Upcoming Transitions (24h):</strong> {transitions_html}
+        </div>
+        <div class="sched-editor-container">
+            <details id="schedEditorDetails">
+                <summary style="cursor:pointer;font-weight:600;font-size:13px;color:#4da6ff;outline:none;">
+                    &#9998; Edit Schedule JSON Configuration
+                </summary>
+                <div style="margin-top:10px;">
+                    <textarea id="schedConfigText" rows="16" spellcheck="false">{sched_json_pretty}</textarea>
+                    <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+                        <button class="btn-small" id="saveSchedBtn" style="background:#2b8a3e;border-color:#2b8a3e;font-weight:600;">Save &amp; Apply Schedule</button>
+                        <button class="btn-small" id="resetSchedBtn">Reset to Defaults</button>
+                        <button class="btn-small" id="reloadSchedBtn">Reload</button>
+                    </div>
+                    <div id="schedStatusMsg" style="display:none;margin-top:8px;padding:8px 12px;border-radius:4px;font-size:12px;"></div>
+                </div>
+            </details>
+        </div>
     </div>
 
     <div class="fleet-section">
@@ -1747,7 +2029,163 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 }}
             }});
         }}
+
+        const schedPhaseSelect = document.getElementById("schedPhaseSelect");
+        const schedFastPollCheck = document.getElementById("schedFastPollCheck");
+        const schedStatusMsg = document.getElementById("schedStatusMsg");
+        const schedConfigText = document.getElementById("schedConfigText");
+
+        function showSchedMsg(text, isError) {{
+            if (!schedStatusMsg) return;
+            schedStatusMsg.style.display = "block";
+            schedStatusMsg.style.background = isError ? "#5c1d1d" : "#1d5c2b";
+            schedStatusMsg.style.color = "#fff";
+            schedStatusMsg.textContent = text;
+        }}
+
+        const applyOverrideBtn = document.getElementById("applySchedOverrideBtn");
+        if (applyOverrideBtn) {{
+            applyOverrideBtn.addEventListener("click", async () => {{
+                const phase = schedPhaseSelect ? schedPhaseSelect.value : "";
+                const fast = schedFastPollCheck ? schedFastPollCheck.checked : false;
+                const tok = getAuthToken();
+                try {{
+                    const res = await fetch("/schedule", {{
+                        method: "POST",
+                        headers: {{
+                            "Content-Type": "application/json",
+                            "X-Tracker-Token": tok
+                        }},
+                        body: JSON.stringify({{
+                            action: "override",
+                            force_phase: phase,
+                            force_fast_poll: fast
+                        }})
+                    }});
+                    const data = await res.json().catch(() => ({{}}));
+                    if (res.ok) {{
+                        showSchedMsg("Schedule override applied successfully.", false);
+                        setTimeout(() => window.location.reload(), 600);
+                    }} else {{
+                        showSchedMsg("Override failed: " + (data.error || ("HTTP " + res.status)), true);
+                    }}
+                }} catch (err) {{
+                    showSchedMsg("Network error: " + err.message, true);
+                }}
+            }});
+        }}
+
+        const clearOverrideBtn = document.getElementById("clearSchedOverrideBtn");
+        if (clearOverrideBtn) {{
+            clearOverrideBtn.addEventListener("click", async () => {{
+                const tok = getAuthToken();
+                try {{
+                    const res = await fetch("/schedule", {{
+                        method: "POST",
+                        headers: {{
+                            "Content-Type": "application/json",
+                            "X-Tracker-Token": tok
+                        }},
+                        body: JSON.stringify({{ action: "clear_override" }})
+                    }});
+                    const data = await res.json().catch(() => ({{}}));
+                    if (res.ok) {{
+                        showSchedMsg("Schedule overrides cleared.", false);
+                        setTimeout(() => window.location.reload(), 600);
+                    }} else {{
+                        showSchedMsg("Clear failed: " + (data.error || ("HTTP " + res.status)), true);
+                    }}
+                }} catch (err) {{
+                    showSchedMsg("Network error: " + err.message, true);
+                }}
+            }});
+        }}
+
+        const saveSchedBtn = document.getElementById("saveSchedBtn");
+        if (saveSchedBtn) {{
+            saveSchedBtn.addEventListener("click", async () => {{
+                const raw = schedConfigText ? schedConfigText.value : "";
+                let parsedConfig;
+                try {{
+                    parsedConfig = JSON.parse(raw);
+                }} catch (err) {{
+                    showSchedMsg("JSON parse error: " + err.message, true);
+                    return;
+                }}
+                const tok = getAuthToken();
+                try {{
+                    const res = await fetch("/schedule", {{
+                        method: "POST",
+                        headers: {{
+                            "Content-Type": "application/json",
+                            "X-Tracker-Token": tok
+                        }},
+                        body: JSON.stringify({{ action: "save", config: parsedConfig }})
+                    }});
+                    const data = await res.json().catch(() => ({{}}));
+                    if (res.ok) {{
+                        showSchedMsg("Schedule saved & applied successfully.", false);
+                        setTimeout(() => window.location.reload(), 800);
+                    }} else {{
+                        showSchedMsg("Validation / Save error: " + (data.error || ("HTTP " + res.status)), true);
+                    }}
+                }} catch (err) {{
+                    showSchedMsg("Network error: " + err.message, true);
+                }}
+            }});
+        }}
+
+        const resetSchedBtn = document.getElementById("resetSchedBtn");
+        if (resetSchedBtn) {{
+            resetSchedBtn.addEventListener("click", async () => {{
+                if (!confirm("Are you sure you want to reset schedule to defaults?")) return;
+                const tok = getAuthToken();
+                try {{
+                    const res = await fetch("/schedule", {{
+                        method: "POST",
+                        headers: {{
+                            "Content-Type": "application/json",
+                            "X-Tracker-Token": tok
+                        }},
+                        body: JSON.stringify({{ action: "reset" }})
+                    }});
+                    const data = await res.json().catch(() => ({{}}));
+                    if (res.ok) {{
+                        showSchedMsg("Schedule reset to defaults.", false);
+                        setTimeout(() => window.location.reload(), 600);
+                    }} else {{
+                        showSchedMsg("Reset failed: " + (data.error || ("HTTP " + res.status)), true);
+                    }}
+                }} catch (err) {{
+                    showSchedMsg("Network error: " + err.message, true);
+                }}
+            }});
+        }}
+
+        const reloadSchedBtn = document.getElementById("reloadSchedBtn");
+        if (reloadSchedBtn) {{
+            reloadSchedBtn.addEventListener("click", async () => {{
+                const tok = getAuthToken();
+                try {{
+                    const res = await fetch("/schedule", {{
+                        headers: {{ "X-Tracker-Token": tok }}
+                    }});
+                    if (res.ok) {{
+                        const data = await res.json();
+                        if (schedConfigText && data.config) {{
+                            schedConfigText.value = JSON.stringify(data.config, null, 2);
+                            showSchedMsg("Schedule configuration reloaded.", false);
+                        }}
+                    }} else {{
+                        showSchedMsg("Reload failed: HTTP " + res.status, true);
+                    }}
+                }} catch (err) {{
+                    showSchedMsg("Error: " + err.message, true);
+                }}
+            }});
+        }}
     </script>
+
 </body>
 </html>"""
             payload = html_content.encode("utf-8")

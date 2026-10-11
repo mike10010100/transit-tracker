@@ -183,6 +183,33 @@ Read-only view of the schedule state machine, for debugging `schedule.json`. Lik
 ```
 `error` contains the most recent rejected-file message, while the last good config remains active. `transitions` covers the next 24 hours.
 
+### 4.1b `POST /schedule`
+Modifies the schedule state machine configuration or sets runtime phase and polling cadence overrides. Requires `X-Tracker-Token`.
+
+#### Actions
+- **Set Runtime Overrides**:
+  ```json
+  { "action": "override", "force_phase": "peak", "force_fast_poll": true }
+  ```
+  Pass `force_phase: ""` or `"auto"` to clear the phase override and return to scheduled operation.
+- **Clear Overrides**:
+  ```json
+  { "action": "clear_override" }
+  ```
+- **Save Schedule Configuration**:
+  ```json
+  { "action": "save", "config": { "version": 1, "phases": { ... }, "windows": [ ... ] } }
+  ```
+  Strictly validated against schedule schema; persists to `schedule.json` (with automatic fallback to `CACHE_DIR/schedule.json` if mounted read-only).
+- **Reset to Defaults**:
+  ```json
+  { "action": "reset" }
+  ```
+
+#### Response (`200 OK`, `application/json`)
+Returns the updated schedule report in the same format as `GET /schedule`. On validation error, returns `400 Bad Request` with `{"error": "<validation message>"}`.
+
+
 ### 4.2 `POST /action`
 Queues a hardware or software action for a specific client or the entire fleet.
 
