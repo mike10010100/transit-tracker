@@ -21,9 +21,10 @@ This guide covers deployment, hardware interfacing, gesture controls, and displa
 
 ## 2. Jailbreak Prerequisites
 
-1. The Kindle must have a working software jailbreak (e.g. **LanguageBreak** or **WinterBreak** for FW 5.14.x–5.16.x).
-2. The device must have developer keystores installed to allow shell scripts to execute from the user documents directory.
-3. Wi-Fi must be configured and connected to the same LAN subnet as the Transit Tracker server.
+Before deploying to a Kindle Paperwhite:
+1. **Software Jailbreak**: The Kindle must have a working jailbreak (e.g. **LanguageBreak** or **WinterBreak** for FW 5.14.x–5.16.x).
+2. **Developer Keys**: Hotfix/developer keystores must be installed to allow shell scripts to execute from the user documents partition.
+3. **Local Wi-Fi**: The Kindle must be connected to the same Wi-Fi network or VLAN as the Transit Tracker server.
 
 ---
 
@@ -31,13 +32,13 @@ This guide covers deployment, hardware interfacing, gesture controls, and displa
 
 The bootstrap script [`client-go/launcher/TransitTracker.sh`](file:///home/mike10010100/git/transit-tracker/client-go/launcher/TransitTracker.sh) provides zero-touch onboarding:
 
-1. Connect the Kindle to your computer over USB.
-2. Copy `client-go/launcher/TransitTracker.sh` to the Kindle documents partition:
+1. **Connect the Kindle to your computer over USB**.
+2. **Copy the launcher script** to the documents directory:
    ```bash
    cp client-go/launcher/TransitTracker.sh /Volumes/Kindle/documents/
    ```
-3. Safely eject the Kindle over USB.
-4. In your Kindle Library, tap the new **"Transit Tracker"** booklet.
+3. **Safely eject the Kindle** from your computer.
+4. **Tap the new "Transit Tracker" booklet** in your Kindle Library.
 
 ### 3.1 First-Run Boot Sequence
 ```mermaid
@@ -60,26 +61,26 @@ sequenceDiagram
 
 ## 4. Touch Gestures & Button Zones
 
-The Go client directly parses raw evdev input events from `/dev/input/event1` (`pt_mt` digitizer).
+The Go client directly decodes raw evdev input events from `/dev/input/event1` (`pt_mt` digitizer).
 
 ### 4.1 On-Screen Tactile Button Bar
-Along the bottom edge of the landscape display, five distinct tactile touch zones are mapped:
+Along the bottom edge of the landscape display, five distinct touch zones are mapped:
 
-| Zone | Action | Function |
+| Button | Action | Behavior |
 |---|---|---|
 | **BUSES** | Switch View | Activates Route 126 NJ Transit Bus departures view. |
-| **CITI BIKE**| Switch View | Activates Citi Bike dock & e-bike availability view. |
+| **CITI BIKE** | Switch View | Activates Citi Bike dock & e-bike availability view. |
 | **LIGHT** | Frontlight Cycle | Toggles frontlight: **Off (0)** $\rightarrow$ **Cozy (8)** $\rightarrow$ **Bright (18)** $\rightarrow$ **Off (0)**. |
 | **REFRESH** | Immediate Fetch | Bypasses remaining poll countdown and forces an immediate arrival update. |
 | **EXIT** | Clean Exit | Restores standard Kindle Framework (`lipc-set-prop com.lab126.appmgrd start app://com.lab126.booklet.home`). |
 
 ### 4.2 Corner & Surface Gestures
 Outside the bottom button bar:
-- **Single Tap Anywhere**: Keeps the current interaction session awake without flickering the e-ink screen.
-- **Double Tap Anywhere (< 380ms)**: Fast exit shortcut back to Kindle Home.
-- **Top-Left Corner**: Immediate arrival refresh shortcut.
-- **Top-Right Corner**: Instant exit shortcut.
-- **Bottom-Left Corner**: Cycle views between Citi Bike and Bus departures.
+- **Single Tap Anywhere**: Wakes or extends the current viewing session; holds the frontlight without flickering the screen.
+- **Double Tap Anywhere (< 380ms)**: Quick exit shortcut back to Kindle Home.
+- **Top-Left Corner Tap**: Immediate arrival refresh shortcut.
+- **Top-Right Corner Tap**: Instant exit shortcut.
+- **Bottom-Left Corner Tap**: Cycles views between Citi Bike and Bus departures.
 
 ### 4.3 Hardware Power Button
 Pressing the physical Kindle power button generates `KEY_POWER` (`116`) events on `/dev/input/event0`:
@@ -107,18 +108,44 @@ lipc-set-prop com.lab126.powerd flIntensity 8
 lipc-set-prop com.lab126.powerd flWarmth 12
 ```
 
-### 5.2 Battery Protection & Bound Timeouts
-All calls to `lipc` in `client-go/main.go` are strictly bounded with a 2-second timeout (`lipcCallTimeout`). If `powerd` stalls or deadlocks after an OS sleep resume, the input dispatcher automatically recovers rather than freezing touch interaction.
+### 5.2 Battery Protection & Timeouts
+All calls to `lipc` in the client are bounded with a 2-second timeout. If `powerd` stalls or deadlocks after an OS sleep resume, the input dispatcher automatically recovers rather than freezing touch interaction.
+
+### 5.3 Client Identifier Storage
+The client stores its persistent identifier in `/mnt/us/documents/.tracker_client_id.txt` as a hidden dotfile. This prevents the Kindle library indexing service from treating the identifier file as an ebook on the home screen.
 
 ---
 
 ## 6. E-Ink Framebuffer Pipeline
 
-1. **Resolution Detection**: The client reads `/sys/class/graphics/fb0/virtual_size` to determine the native panel dimensions.
-2. **Server-Side Native Rendering**: The server renders images at the exact pixel geometry (1648×1236 landscape) and performs a pure coordinate transpose to portrait before sending.
+1. **Resolution Detection**: The client reads `/sys/class/graphics/fb0/virtual_size` to determine native panel dimensions.
+2. **Server-Side Native Rendering**: The server renders images at the exact pixel geometry (1648×1236 landscape) and transposes coordinates to portrait before delivery.
 3. **Hardware Waveform Ingestion**:
    - The client invokes the Kindle native binary `/usr/sbin/eips`:
      ```bash
      /usr/sbin/eips -g /tmp/dashboard.png
      ```
-   - Hardware waveform controllers on the Kindle drive the micro-capsules directly, preventing ghosting while avoiding slow full-screen flashing during daytime operation.
+   - Hardware waveform controllers drive the micro-capsules directly, preventing ghosting while avoiding slow full-screen flashing.
+
+---
+
+## 7. Troubleshooting & FAQ
+
+### The Kindle cannot locate the server automatically
+If UDP discovery fails (e.g. your Wi-Fi router blocks multicast or clients are on separate subnets):
+1. Connect the Kindle over USB.
+2. Create a text file at `/Volumes/Kindle/documents/tracker_server.txt`.
+3. Put your server's exact IP and port on a single line:
+   ```text
+   http://192.168.1.100:8000
+   ```
+4. Eject the Kindle and tap "Transit Tracker" again.
+
+### The screen does not refresh every minute
+This is intentional! The client uses conditional HTTP requests (`ETag` / `If-None-Match`). If transit arrivals and Citi Bike dock counts have not changed, the server returns `304 Not Modified`. The e-ink display does not refresh, saving battery and screen life.
+
+### How do I exit Transit Tracker?
+- Tap the **EXIT** button on the bottom right of the screen.
+- Or **double-tap** anywhere on the screen within 380ms.
+- Or press the physical **power button** once.
+- The Kindle will immediately return to your normal book library.
