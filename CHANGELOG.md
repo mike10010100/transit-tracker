@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.38.1] - 2026-10-10
+
+### Documentation
+
+- **Documentation Rectification Sweep**: Performed an end-to-end rectification sweep across `README.md` and all guides in `docs/` (`README.md`, `architecture.md`, `api.md`, `hardware_kindle.md`, `security.md`, `development.md`).
+- **New User Onboarding & Progressive Disclosure**: Restructured root `README.md` with an instant <2-minute Quick Start, visual dashboard preview layout, simplified Kindle setup steps, and progressive disclosure moving deep kernel/cryptographic internals into dedicated topic guides.
+- **Documentation Hub**: Transformed `docs/README.md` into an onboarding navigation hub organized by user persona (new users, Kindle deployers, operators/sysadmins, security auditors, and developers) with a terminology glossary and troubleshooting FAQ.
+- **Architecture & Client Alignment**: Synchronized `docs/architecture.md` with current codebase changes, documenting hidden dotfile `.tracker_client_id.txt` storage, web dashboard schedule editor and persistence fallback (`ConfigStore`), and updated Go client subsystem responsibilities.
+- **API Reference & Example Modernization**: Updated `docs/api.md` with current version tags (`1.38.0`/`1.38.1`), documented all control actions for `POST /action` and execution modes for `POST /mode`, and provided concrete `curl` invocation examples with `X-Tracker-Token`.
+- **Security & Dual-Format Signing**: Updated `docs/security.md` to document server dual-format response signing (`transit-tracker-resp-v2` and legacy `transit-tracker-resp-v1`) for backward compatibility, accompanied by plain-English explanations of constant-time side-channel defenses.
+- **Hardware & Troubleshooting Guidance**: Enhanced `docs/hardware_kindle.md` with a step-by-step installation walkthrough, tactile button table, and a dedicated troubleshooting section for offline discovery and e-ink conditional refresh behaviors.
+- **Developer Guide Metrics**: Aligned `docs/development.md` with current test suite counts (414 Python unit tests, 10-tier launcher tests) and verified Mermaid diagram compliance across all documentation files.
+
+---
+
 ## [1.38.0] - 2026-10-10
 
 ### Added

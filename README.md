@@ -1,14 +1,131 @@
 # Hoboken Transit Tracker (E-Ink Dashboard & Kindle Client)
 
-A real-time transit arrival and dock dashboard for Hoboken, NJ, tracking:
+A real-time transit and micro-mobility dashboard for Hoboken, NJ, tracking:
 - **NJ Transit Route 126** NYC-bound buses at Washington St & 9th St (`#20512`) and Clinton St & 9th St (`#20494`).
 - **Citi Bike** live dock & e-bike availability at nearby stations (Clinton & 9th, Washington & 11th, Willow & 12th, Washington & 8th, Clinton & 7th, Grand & 6th).
 
-Built for low-power e-ink wall displays and jailbroken Amazon Kindle devices (tested on Kindle Paperwhite 5 / PW5).
+Built for low-power e-ink wall displays, jailbroken Amazon Kindle devices (Kindle Paperwhite 5 / PW5), and any modern web browser.
 
 ---
 
-## Architecture Overview
+## ⚡ Quick Start (< 2 Minutes)
+
+You can run the server immediately on any Linux, macOS, or Raspberry Pi machine:
+
+### Option A: Docker Compose (Recommended)
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/mike10010100/transit-tracker.git
+cd transit-tracker
+
+# 2. (Optional) Copy environment template
+cp .env.example .env
+chmod 600 .env
+
+# 3. Start the server
+docker compose up -d
+```
+
+### Option B: Local Python Server
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Start the server
+python server/server.py
+```
+
+### View in Your Browser
+
+Once started, open these URLs in your web browser:
+- **Live Web Dashboard & Schedule Manager**: [`http://localhost:8000`](http://localhost:8000)
+- **Rendered Kindle E-Ink Image**: [`http://localhost:8000/dashboard.png?kindle=pw5`](http://localhost:8000/dashboard.png?kindle=pw5)
+- **Health Check**: [`http://localhost:8000/healthz`](http://localhost:8000/healthz)
+
+---
+
+## 🧭 Dashboard Views & User Interface
+
+The dashboard automatically optimizes its layout based on the time of day:
+
+```
++-------------------------------------------------------------------------+
+| HOBOKEN TRANSIT TRACKER               BATTERY: 87% [⚡]   UPDATED: 08:15 |
++------------------------------------+------------------------------------+
+|  CITI BIKE DOCKS (MORNING HERO)    |  NJ TRANSIT ROUTE 126 BUSES        |
+|  Clinton & 9th St:  12 bikes [6 ⚡] |  Washington & 9th: 3 min, 11 min   |
+|  Washington & 11th:  8 bikes [4 ⚡] |  Clinton & 9th:    6 min, 18 min   |
+|  Willow & 12th:      4 bikes [2 ⚡] |  Status: Normal Service            |
++------------------------------------+------------------------------------+
+| [BUSES]    [CITI BIKE]    [LIGHT]    [REFRESH]    [EXIT]  | Phase: Peak |
++-------------------------------------------------------------------------+
+```
+
+- **☀️ Morning View (5:00 AM – 12:00 PM)**: Prioritizes Citi Bike dock availability and e-bike counts for the morning commute into Manhattan.
+- **🌙 Evening View (12:00 PM – 5:00 AM)**: Prioritizes NJ Transit Route 126 departures with real-time ETA predictions.
+- **🔄 Auto-Switching**: The server selects the appropriate view automatically, or you can switch manually via the touch screen or web interface.
+
+---
+
+## 📱 Kindle Paperwhite 5 Setup
+
+Turn any jailbroken Kindle Paperwhite 5 into an ultra-low-power, wall-mounted transit monitor:
+
+1. **Connect Kindle to your computer over USB**.
+2. **Copy the launcher script**:
+   ```bash
+   cp client-go/launcher/TransitTracker.sh /Volumes/Kindle/documents/
+   ```
+3. **Safely eject the Kindle**, go to your Library, and tap **"Transit Tracker"**.
+
+### Zero-Configuration Discovery
+The Kindle client automatically scans your local Wi-Fi network via UDP broadcast and `/24` subnet sweeps, verifies the server's cryptographic identity, and starts polling without manual IP configuration.
+
+*(Optional manual override: Create `/Volumes/Kindle/documents/tracker_server.txt` containing your server URL, e.g. `http://192.168.1.100:8000`.)*
+
+> [!TIP]
+> For complete Kindle jailbreak prerequisites, hardware evdev mapping, and low-power configuration, see the **[Hardware & Kindle Paperwhite Guide](docs/hardware_kindle.md)**.
+
+---
+
+## 👆 Touch Controls & Hardware Gestures
+
+When running on a Kindle Paperwhite, the following physical and touch interactions are available:
+
+| Input / Gesture | Location | Action |
+|---|---|---|
+| **BUSES** | Bottom button bar | Switches to Route 126 Bus departures view. |
+| **CITI BIKE** | Bottom button bar | Switches to Citi Bike availability view. |
+| **LIGHT** | Bottom button bar | Cycles frontlight: **Off (0)** $\rightarrow$ **Cozy (8)** $\rightarrow$ **Bright (18)** $\rightarrow$ **Off (0)**. |
+| **REFRESH** | Bottom button bar | Forces an immediate arrival refresh. |
+| **EXIT** | Bottom button bar | Cleanly exits back to the Kindle Home screen. |
+| **Single Tap** | Anywhere on screen | Wakes interaction session; keeps frontlight on. |
+| **Double Tap** | Anywhere (< 380ms) | Quick exit back to Kindle Home. |
+| **Power Button** | Hardware button | Wakes dormant screen; clean exit if already interactive. |
+| **Top-Left Tap** | Top-left corner | Immediate arrival refresh shortcut. |
+| **Top-Right Tap** | Top-right corner | Immediate exit shortcut. |
+
+---
+
+## ⏱️ Schedule & Power Management
+
+The dashboard uses a declarative state machine to conserve energy throughout the day:
+
+- **Peak Phases (Morning 7:30–9:30 AM, Evening 4:30–7:00 PM)**: Fast 60-second polling cadence, interactive display, and cozy frontlight illumination.
+- **Off-Peak Phase**: Relaxed 10-minute polling interval with frontlight turned off.
+- **Overnight Phase (10:00 PM – 6:00 AM)**: Low-power deep sleep with 60-minute polling. The Kindle suspends to RAM with hardware RTC wakealarms clamped to the morning wake boundary.
+
+### Customizing the Schedule
+The schedule is fully customizable via `config/schedule.json` or directly in the browser at `http://localhost:8000`:
+- **Web UI Editor**: View the next 24 hours of transitions, toggle fast-poll mode, or edit and validate schedule JSON live.
+- **Hot-Reloading**: Changes to `config/schedule.json` are applied automatically without restarting the server.
+- See the [Schedule State Machine Documentation](docs/architecture.md#23-schedule-state-machine-serverstate_machinepy-serverschedulepy) for syntax and examples.
+
+---
+
+## 🏗️ Architecture Overview
 
 ```mermaid
 flowchart TD
@@ -39,183 +156,63 @@ flowchart TD
     HttpServer ==>|"HTTP Polling (ETag 304) & Signed OTA"| Client
 ```
 
-The application version is defined once in [`VERSION`](VERSION). The Python
-server and Citi Bike user agent read it directly; the Go client receives it at
-build time via `-ldflags "-X main.Version=..."`.
+- **Dual-Redundancy Arrival Engine**: Primary queries use NJ Transit DepartureVision BUSDV2, with instantaneous fallback to NJ Transit GraphQL and static GTFS schedule caches if upstream APIs stall.
+- **Native Resolution Rasterization**: Renders directly at the Kindle PW5's native 1648×1236 panel resolution with crisp subpixel typography rather than upscaling low-resolution bitmaps.
+- **Zero-Transfer 304 Not Modified**: Conditional HTTP requests (`ETag` / `If-None-Match`) ensure the e-ink screen is only refreshed when transit data actually changes.
+- **Zero External Go Dependencies**: The Kindle client is built using 100% Go standard library for minimal footprint, memory safety, and maximum stability on embedded Linux.
 
 ---
 
-## Detailed Documentation
+## 🔒 Security & Cryptographic Trust
 
-Comprehensive technical documentation is organized in the [`docs/`](docs/) directory:
-
-- **[Architecture & System Design](docs/architecture.md)**: Multi-tier topology, dual-redundancy arrival engine, native resolution rendering, schedule governor, and fleet management.
-- **[Security Specification & Cryptographic Model](docs/security.md)**: Ed25519 root trust chain, signed OTA manifests, server certificates, constant-time verification, and CSP.
-- **[HTTP API & Protocol Reference](docs/api.md)**: Complete endpoint reference, query parameters, request/response headers, and control plane commands.
-- **[Hardware & Kindle Paperwhite Guide](docs/hardware_kindle.md)**: PW5 hardware details, jailbreak prerequisites, evdev touch mapping, power key handling, and e-ink framebuffer pipeline.
-- **[Developer Guide & Quality Verification](docs/development.md)**: Makefile reference, static analysis linters, test suites, coverage gates, and signed release builds.
+- **Ed25519 Root of Trust**: All Over-The-Air (OTA) binary updates are cryptographically signed using an Ed25519 release key (`secrets/ota_ed25519.key`).
+- **Compile-Time Pinning**: The public key is baked into the Go client binary at compile time. Untrusted or unsigned updates are rejected.
+- **Authenticated Responses**: Dashboard responses include an `X-Tracker-Auth` signature header that Kindle clients verify before rendering.
+- **Zero-Bypass Control Security**: Administrative endpoints (`POST /schedule`, `POST /action`, `POST /mode`) strictly require an `X-Tracker-Token` header.
+- For complete security details, see the **[Security Specification & Cryptographic Model](docs/security.md)**.
 
 ---
 
-## Features
+## 📚 Technical Documentation Index
 
-- **Dual-Redundancy Arrival Engine:** Primary polling against NJ Transit DepartureVision (BUSDV2) with instant automatic fallback to public GraphQL API. Upstream failures are surfaced distinctly from a genuine "no buses" state.
-- **Citi Bike Dock Telemetry:** Live tracking of nearby Citi Bike docks with real-time e-bike availability prioritization.
-- **Native Kindle Paperwhite 5 Support:** Standalone statically linked Go ARM client running in memory (`/tmp/tracker`). The client reports its true framebuffer size (`/sys/class/graphics/fb0/virtual_size`) so the server renders the dashboard **natively at panel resolution** (e.g. 1648×1236 landscape for the PW5) instead of upscaling an 800px bitmap — text is rasterized crisply and the server only rotates (never resamples) to the portrait framebuffer.
-- **Touch Gestures:**
-  - **Bottom button bar:** `BUSES`, `CITI BIKE`, `LIGHT`, `REFRESH`, `EXIT` tactile buttons along the bottom edge.
-  - **Bottom-Left Corner Tap:** Cycles views between Citi Bike and NJ Transit Bus departures (outside the button bar).
-  - **Single Tap Anywhere:** Cycles frontlight brightness (**Off** $\rightarrow$ **Cozy 8** $\rightarrow$ **Bright 18** $\rightarrow$ **Off**) instantly without flickering the e-ink screen.
-  - **Double Tap Anywhere (< 380ms):** Clean exit back to the Kindle Library / Home booklet.
-  - **Hardware Power Button:** Clean exit to Kindle Library.
-  - **Top-Right Corner Tap:** Instant exit shortcut.
-  - **Top-Left Corner Tap:** Immediate arrival refresh shortcut.
-- **Scheduled Commute Dimming:** A fixed schedule (not solar calculation) adjusts frontlight brightness and warmth during the peak Hoboken commute windows (Morning 7:30–9:30 AM, Evening 4:30–7:00 PM). Manual tap overrides hold for 45 minutes.
-- **Battery Telemetry & Indicator:** Real-time hardware battery percentage and charging state (`⚡`) queried directly via Kindle `lipc` and displayed in the top header and footer status bar.
-- **LAN Auto-Discovery (Zero-Config):** Automatically discovers the running server across the local network via UDP broadcast (`TRANSIT_TRACKER_DISCOVER` on port 8001) and a /24 subnet sweep. Only loopback/link-local/private addresses are auto-adopted. `BUS_TRACKER_*` legacy probes are still accepted for older clients.
-- **Wireless Over-The-Air (OTA) Hot-Reloading:** The Kindle polls the server and automatically self-updates its running Go binary in RAM via `syscall.Exec` when a new build is available. Downloads are verified against the server's `X-Tracker-SHA256` header before execution. The update check is folded into the dashboard response (no separate per-cycle request); a new binary is only downloaded when the advertised version differs.
-- **Low-Power Polling:** The client makes a **single conditional request per cycle**. The server advertises its version + binary digest on the dashboard response so the OTA decision needs no extra request, and returns `304 Not Modified` (via `ETag`/`If-None-Match`) when the dashboard is byte-identical — so an unchanged screen costs neither the ~90 KB transfer nor the `eips` refresh. HTTP/1.1 keep-alive lets consecutive requests reuse one TCP connection. Diagnostics are delivered by a single queued sender instead of one goroutine (and radio wake) per log line.
-- **Local Fallback Mode:** Caches the last valid binary and offline notification if the server is unreachable.
+For in-depth guides and system specifications, explore the [`docs/`](docs/) directory:
+
+| Document | Focus & Audience | Key Contents |
+|---|---|---|
+| **[Documentation Hub](docs/README.md)** | All Users & Developers | Complete onboarding guide, troubleshooting FAQ, and topic index. |
+| **[Architecture & Design](docs/architecture.md)** | Systems Engineers | Multi-tier topology, arrival engine fallback, schedule state machine, and fleet registry. |
+| **[Hardware & Kindle Guide](docs/hardware_kindle.md)** | Kindle Users & Deployers | PW5 specifications, jailbreak guide, evdev mapping, and power management. |
+| **[HTTP API & Protocol](docs/api.md)** | Integrators & Developers | Full endpoint reference, query parameters, header specifications, and payload examples. |
+| **[Security Specification](docs/security.md)** | Security Auditors | Ed25519 trust chain, OTA manifest verification, authenticated responses, and CSP. |
+| **[Developer Guide](docs/development.md)** | Contributors & Maintainers | Build instructions, test suites, coverage gates, and CI/CD pipelines. |
 
 ---
 
-## Setup & Usage
+## 🛠️ Developer Verification & Testing
 
-### Option A: Docker Compose (Recommended for Home Servers / Raspberry Pi)
-
-Run the server 24/7 as an appliance with automatic restarts on reboot:
+Verify code quality across all stacks with the unified Makefile:
 
 ```bash
-# 1. Clone repository
-git clone https://github.com/mike10010100/transit-tracker.git
-cd transit-tracker
-
-# 2. (Optional) Configure NJ Transit credentials
-cp .env.example .env
-chmod 600 .env
-# Edit .env with your credentials if desired (NJT_BASE_URL defaults to https://pcsdata.njtransit.com)
-
-# 3. Start in background
-docker compose up -d
-```
-
-`network_mode: host` is enabled in `docker-compose.yml`, which lets the container seamlessly broadcast mDNS service records and respond to Kindle UDP discovery packets without NAT hurdles.
-
-### Option B: Local Python Server
-
-```bash
-pip install -r requirements.txt
-cp .env.example .env
-chmod 600 .env
-python server/server.py
-```
-- **Web UI (Auto-reloading):** `http://localhost:8000`
-- **Kindle Image Endpoint:** `http://<SERVER_IP>:8000/dashboard.png?kindle=pw5`
-
-### Customising the Schedule
-
-The schedule is a configurable state machine. Named **phases** (`peak`, `offpeak`, `overnight`, or your own) set the poll interval, the e-ink face, the frontlight, realtime feeds and suspend behaviour. Ordered **windows** pick the phase by time of day and day of week.
-
-```bash
-cp config/schedule.example.json config/schedule.json
-$EDITOR config/schedule.json      # hot-reloaded; no restart needed
-curl -H "X-Tracker-Token: $TRACKER_CONTROL_TOKEN" http://<SERVER_IP>:8000/schedule
-```
-
-You only need to include the keys you change, e.g. `{"phases": {"peak": {"lighting": {"brightness": 4}}}}`. An invalid file is rejected as a whole and the previous config stays active; `GET /schedule` reports why. See [architecture §2.3](docs/architecture.md#23-schedule-state-machine-serverstate_machinepy-serverschedulepy) for the full reference.
-
-### Control Endpoints
-
-State-mutating control plane operations (`POST /stop`, `POST /resume`, `POST /mode`, `POST /action`, `POST /diag/request`) and query endpoints (`GET /devices`, `GET /schedule`, `GET /mode`, `GET /action`, `GET /diag`) require authentication via the `X-Tracker-Token` header:
-
-```bash
-export TRACKER_CONTROL_TOKEN=my-secret
-curl -X POST -H "X-Tracker-Token: my-secret" http://<SERVER_IP>:8000/stop
-```
-
-- **Zero-Bypass Policy:** There is no loopback or private IP bypass; every control request requires the token. Query parameter tokens are rejected to prevent leakage in logs or referrers.
-- **Automatic Token Generation:** If `TRACKER_CONTROL_TOKEN` is unset in the environment, the server generates a cryptographically secure random 256-bit hex token (stored with `0600` permissions in the cache directory) and logs it on startup.
-- **Web Interface:** The web management UI stores the token in browser `localStorage` and sends it via fetch headers; the token is never rendered into the HTML document.
-
----
-
-## Kindle Paperwhite Setup
-
-1. Copy `client-go/launcher/TransitTracker.sh` to your Kindle's `documents/` directory:
-   ```bash
-   cp client-go/launcher/TransitTracker.sh /Volumes/Kindle/documents/
-   ```
-2. In your Kindle Library, tap **"Transit Tracker"**.
-   - **Auto-Discovery:** The Go client automatically scans your Wi-Fi network via UDP broadcast, locates the running server, and cryptographically verifies its identity before persisting the URL.
-   - **Self-Updating Launcher:** The launcher script automatically self-updates itself from the Go binary's embedded release if updated.
-   - *(Optional Manual Override)*: You can force a specific server address by creating `/Volumes/Kindle/documents/tracker_server.txt` containing your server URL (e.g. `http://192.168.1.100:8000`).
-
----
-
-## Security Model & Signed OTA Releases
-
-The project employs an end-to-end cryptographic trust chain built on **Ed25519** signatures:
-
-1. **Release Key:** `make keygen` generates an Ed25519 release signing key (`secrets/ota_ed25519.key`, mode `0600`).
-2. **Client Pinning:** The public release key is baked into the Go client at compile time (`-X main.OTAPublicKey=...`).
-3. **Signed OTA Manifests:** `tracker-arm.manifest.json` specifies the version, binary SHA-256, and byte size, signed by the release key. The client verifies the signature, hash, and strict semver progression before executing updates.
-4. **Server Identity Certificates:** The server possesses an Ed25519 identity key certified by the release key (`server_identity.cert.json`).
-5. **Authenticated Responses:** Dashboard responses (`/dashboard.png`) and discovery endpoints (`/identity`) include cryptographic nonce signatures. The Kindle validates the signature against the server certificate and release key before rendering or adopting configurations.
-
-### Building the Go Client & Releases
-
-To generate a key and compile a signed release:
-```bash
-make keygen   # Generate release key in secrets/ota_ed25519.key (run once)
-make build    # Cross-compiles tracker-arm, signs manifest, and mints server cert
-make verify-release # Validates manifest and binary against public key
-```
-
-For development builds without OTA signing:
-```bash
-ALLOW_UNSIGNED=1 make build
-```
-
-The CLI tool `client-go/cmd/otasign` provides stdlib-only utilities for key generation, public key extraction, manifest signing, server cert minting, and signature verification.
-
----
-
-## Development & Verification Suite
-
-Install the development dependencies:
-```bash
+# 1. Install development dependencies
 pip install -r requirements-dev.txt
+
+# 2. Run the complete quality verification pipeline
+make check
+
+# Or run individual verification suites:
+make fmt-check    # Check Go and Python formatting
+make lint         # Run all linters (go vet, mypy, ruff, shellcheck)
+make test         # Run all unit tests (Go -race, Python unittest, Shell)
+make coverage     # Enforce coverage gates (Go >= 93%, Python >= 92%)
 ```
 
-Run the verification suite:
-```bash
-make check       # Complete pipeline: fmt-check, lint, test, audit, coverage gates
-make test        # Run all test suites: Go (-race), Python (unittest), and Shell integration
-make lint        # Run all linters: Go (vet/golangci-lint), Python (mypy/ruff), Shell (shellcheck)
-make fmt         # Format all codebases: Go (gofmt -s) and Python (ruff format)
-make fmt-check   # Check formatting without modifying files
-make audit       # Run vulnerability scanning (govulncheck and pip-audit)
-make coverage    # Enforce coverage gates across Go and Python stacks
-```
-
-### Test Coverage & Standards
-
-Both stacks enforce strict coverage gates and static analysis in CI and `make check`:
-
-| Stack  | Static Analysis & Linters | Verification Tool / Framework | Gate | Current |
-|--------|---------------------------|-------------------------------|------|---------|
-| Go     | `go vet`, `golangci-lint` | `go test -v -race`            | 93%  | 93.5%   |
-| Python | `ruff`, `mypy` (strict)   | `coverage.py` (`pyproject.toml`) | 92% | 95.0%   |
-| Shell  | `shellcheck` (strict)     | `tests/test_launcher.sh` (8/8 integration) | 100% | 100% |
-| Docker | `hadolint`                | Container smoke test          | -    | Pass    |
-
-- **Go gate:** `scripts/check_coverage_go.sh 93` (covers `client-go`, `cmd/otasign`, and `internal/otasig`).
-- **Python gate:** `--fail-under=92` in `pyproject.toml` (evaluates branch coverage across all 17 modules).
-- **Race Safety:** All Go unit tests run cleanly with `-race` with zero data races.
-- **Hermetic Testing:** Tests isolate runtime environments, filesystem access, and network interfaces using dedicated test seams.
+### Coverage & Verification Status
+- **Go Client**: `93.5%` statement coverage (gate: `93%`, tested with `-race`).
+- **Python Server**: `94.0%+` branch coverage across 414 tests in 18 modules (gate: `92%`).
+- **Shell Launcher**: `10/10` end-to-end integration tests passing with ShellCheck compliance.
 
 ---
 
-## License
+## 📄 License
 
-MIT License. See [LICENSE](LICENSE) for details.
+This project is open-source under the [MIT License](LICENSE).

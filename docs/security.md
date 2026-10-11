@@ -19,10 +19,10 @@ flowchart TD
     
     Responses["Signed Server Responses\n(X-Tracker-Auth / X-Tracker-Cert)"]
     
-    RootKey -->|make build / otasign| PubKey
+    RootKey -->|"make build / otasign"| PubKey
     RootKey -->|Signs| Manifest
     RootKey -->|Mints| ServerCert
-    ServerKey -->|Signs Response + Nonce| Responses
+    ServerKey -->|"Signs Response + Nonce"| Responses
     
     PubKey -->|Verifies Manifest| Manifest
     PubKey -->|Verifies Server Cert| ServerCert
@@ -47,7 +47,7 @@ Devices will only update themselves if a release is cryptographically proven to 
 ### 2.1 Manifest Structure (`tracker-arm.manifest.json`)
 ```json
 {
-  "version": "1.35.5",
+  "version": "1.38.0",
   "sha256": "0109ef3df247a368977e1d8fcb307788578ae3b7a7c2edd1b1642fc6f9fa5429",
   "size": 6750370,
   "signature": "<base64-ed25519-signature>"
@@ -57,15 +57,15 @@ Devices will only update themselves if a release is cryptographically proven to 
 ### 2.2 Verification Rules
 Before executing `syscall.Exec` on a downloaded binary, the client verifies:
 1. **Signature Validity**: The Ed25519 signature verifies the canonical JSON payload using the embedded `OTAPublicKey`.
-2. **Strict Semver Progression**: The advertised version must be strictly greater than the currently running version (prevents downgrade attacks).
+2. **Strict Semver Progression**: The advertised version must be strictly greater than the currently running version (prevents rollback/downgrade attacks).
 3. **Exact Digest Match**: The SHA-256 digest of the downloaded file is verified using constant-time comparison against `sha256`.
-4. **Byte Size Check**: The binary length must match `size` exactly (prevents payload truncation or streaming exhaustion).
+4. **Byte Size Check**: The binary length must match `size` exactly (prevents payload truncation or streaming exhaustion attacks).
 
 ---
 
 ## 3. Server Identity & Authenticated Responses
 
-To prevent malicious LAN devices from spoofing transit data or sending bogus control commands, server responses are authenticated.
+To prevent malicious LAN devices from spoofing transit data or sending bogus control commands, server responses are cryptographically authenticated.
 
 ### 3.1 Server Identity Certificate (`server_identity.cert.json`)
 The server certificate is minted during `make build` and signed by the root release key:
@@ -83,7 +83,7 @@ The server certificate is minted during `make build` and signed by the root rele
    ```http
    X-Tracker-Nonce: a1b2c3d4e5f6...
    ```
-2. The server signs the response headers, body digest, and the client nonce using its `server_identity.key`:
+2. The server signs the response headers, body digest, and client nonce using its `server_identity.key`:
    ```http
    X-Tracker-Auth: <base64-response-signature>
    X-Tracker-Cert: <escaped-server-identity-cert-json>
@@ -93,21 +93,22 @@ The server certificate is minted during `make build` and signed by the root rele
    - That the signature on the response headers/body/nonce is valid for the server's public key.
    - If verification fails, the response is discarded and the display remains untouched.
 
-### 3.3 Signed Response Format
-The signed message (`transit-tracker-resp-v2`) covers a fixed, ordered list of 13 headers. A header that is absent is still signed, as an empty `name=` line.
+### 3.3 Dual-Format Signed Responses (`v2` and `v1`)
+The server supports dual-format response signing to maintain backward compatibility with older deployed clients while authenticating modern policy headers:
 
-| Format (first line of the message) | Signed headers |
-|---|---|
-| `transit-tracker-resp-v2` | `etag`, `x-kindle-poll-interval`, `x-tracker-presentation`, `x-tracker-mode`, `x-tracker-action`, `x-tracker-diag`, `x-kindle-brightness`, `x-kindle-warmth`, `x-tracker-version`, `x-tracker-sha256`, `x-resolved-view`, `x-tracker-view`, `x-tracker-policy` |
+| Format Version | Header Scope | Supported Clients |
+|---|---|---|
+| `transit-tracker-resp-v2` | 13 headers: `etag`, `x-kindle-poll-interval`, `x-tracker-presentation`, `x-tracker-mode`, `x-tracker-action`, `x-tracker-diag`, `x-kindle-brightness`, `x-kindle-warmth`, `x-tracker-version`, `x-tracker-sha256`, `x-resolved-view`, `x-tracker-view`, `x-tracker-policy` | Modern clients ($\ge$ v1.36.0) |
+| `transit-tracker-resp-v1` | 12 headers (identical to v2, omitting `x-tracker-policy`) | Legacy clients (< v1.36.0) |
 
-- `X-Tracker-Policy` is included directly in the response signature alongside all other presentation and control headers.
-- Shared test vectors are in `client-go/internal/otasig/testdata/vectors.json` (`response`).
+- Modern clients verify `v2` first, gracefully falling back to `v1`.
+- Older deployed Kindle clients that only know `v1` receive valid `v1` signatures, allowing them to authenticate, render dashboards, and self-update via OTA.
 
 ---
 
 ## 4. Constant-Time Timing Attack Defenses
 
-Standard string equality checks (`==` or `strings.EqualFold`) terminate on the first mismatched byte, creating timing side-channels that can allow attackers to guess HMAC digests or SHA-256 hashes byte-by-byte.
+Standard string equality checks (`==` or `strings.EqualFold`) terminate on the first mismatched byte. This can create timing side-channels that might allow attackers to infer digests byte-by-byte.
 
 - **Go Client**: In `client-go/security.go`, `VerifySHA256` decodes hex digests into raw byte slices and compares them using `crypto/subtle.ConstantTimeCompare`:
   ```go
@@ -126,7 +127,7 @@ Standard string equality checks (`==` or `strings.EqualFold`) terminate on the f
 
 ## 5. Control Plane Authentication & Web UI Hardening
 
-State-mutating endpoints (`/stop`, `/resume`, `/mode`, `/action`, `/diag/request`) require authentication.
+State-mutating endpoints (`/schedule`, `/stop`, `/resume`, `/mode`, `/action`, `/diag/request`) require authentication.
 
 ### 5.1 Zero-Bypass Policy
 - **Header Authentication**: Requests must include the secret token via `X-Tracker-Token: <token>`.
